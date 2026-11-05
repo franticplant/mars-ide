@@ -1,16 +1,44 @@
-# MARS IDE — terminal + web front ends for MARS 4.5
+# MARS IDE
 
-A modern IDE for MIPS assembly built on the real **MARS 4.5** engine (MIPS Assembler and
-Runtime Simulator, © Pete Sanderson & Kenneth Vollmar, MIT license —
-https://dpetersanderson.github.io/). Assembly and simulation are done by MARS itself, so
-results match MARS exactly.
+**MARS — the MIPS Assembler and Runtime Simulator — reworked for the browser, with a terminal UI too.**
 
+MARS IDE puts the real MARS 4.5 assembler and simulator behind modern front ends:
+
+- **In the browser:** the engine is compiled to JavaScript and runs in a Web Worker. There is
+  no server: the site is plain static files, works offline, and keeps your files in the
+  browser. Phones are first-class, with a touch layout and an editing key row above the keyboard.
+- **In the terminal:** a keyboard-driven TUI, comfortable over SSH and in phone terminals.
+- **Same results as MARS:** assembling and running are done by MARS's own code, and a
+  conformance suite checks output, errors, instruction counts, registers and memory against the
+  original MARS 4.5 jar.
+
+It has a code editor with MIPS syntax highlighting, hints and completion, plus breakpoints,
+step and step-back, and register, memory and label views. The Bitmap Display and
+Keyboard/Display MMIO tools are included, along with dialog and MIDI syscalls, a searchable
+MIPS reference card, and themes (including AMOLED black).
+
+### Credits
+
+MARS was created by **Pete Sanderson** and **Kenneth Vollmar** (Missouri State University) and is
+MIT-licensed: <https://dpetersanderson.github.io/>. This repository is a fork of
+[dpetersanderson/MARS](https://github.com/dpetersanderson/MARS) so that it shows up among the
+project's forks. The code here is a full rewrite of the front ends; MARS's simulator is used
+through `engine/patch_core.py`, which patches the MARS 4.5 sources, so its behaviour stays MARS's
+own. MARS IDE is independent and not affiliated with or endorsed by the MARS authors. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### How it fits together
+
+```mermaid
+flowchart LR
+    MARS["MARS 4.5<br/>assembler + simulator"] --> Core["Headless engine<br/>(Java, Swing removed)"]
+    Core -- "TeaVM" --> JS["mars-engine.js"]
+    JS --> Web["Web IDE<br/>static site, runs in the browser"]
+    Core --> TUI["Terminal UI"]
+    Oracle[("original MARS 4.5 jar")] -. "conformance tests" .-> Core
 ```
-        mars-core: headless MARS 4.5 (Swing/AWT removed) + marsx.MarsEngine (JSON protocol)
-            │ stdio                         │ HTTP + SSE                  │ Web Worker (TeaVM → JS)
-      TUI (Python/Textual)          web UI (browser)               static site (browser only)
-```
-More in [docs/architecture.md](docs/architecture.md).
+
+More detail in [docs/architecture.md](docs/architecture.md).
 
 ## Quick start
 
