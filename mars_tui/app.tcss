@@ -1,0 +1,59 @@
+/* Borderless layout: panes are separated by shade, never by box characters. */
+Screen { layout: vertical; background: $background; }
+
+#tabs { background: $panel; }
+Bar.sub { background: $surface; }
+Bar.sub2 { background: $surface; }
+Bar .bar-left { link-style: none; link-background-hover: $boost; link-color-hover: $text; link-style-hover: bold; }
+
+#body { height: 1fr; }
+#main { width: 1fr; height: 1fr; }
+#main > Vertical { height: 1fr; }
+#side { width: 42; height: 1fr; background: $surface; }
+#reg-switch { height: 1fr; }
+#reg-switch > Table { height: 1fr; }
+
+#bottom { height: 30%; min-height: 6; background: $surface; }
+#io-switch { height: 1fr; }
+#run-io { height: 1fr; }
+#console { height: 1fr; border: none; padding: 0 1; background: $surface; scrollbar-size-vertical: 1; }
+#stdin { height: 1; border: none; padding: 0 1; background: $boost; }
+#stdin:focus { border: none; background: $primary 20%; }
+#stdin.-wanted { background: $warning 35%; text-style: bold; }
+#messages { height: 1fr; border: none; background: $surface; padding: 0; }
+#messages:focus { border: none; }
+
+#editors { height: 1fr; }
+#editors > MipsEditor { height: 1fr; }
+#code-table, #mem-table, #label-table { height: 1fr; }
+
+#tool-switch { height: 1fr; }
+#bitmap, #mmio { height: 1fr; }
+.caption { color: $text-muted; padding: 0 1; background: $surface; }
+#mmio-log { height: 1fr; border: none; background: $background; padding: 0 1; }
+
+#help-filter { height: 1; border: none; padding: 0 1; background: $boost; }
+#help-filter:focus { border: none; background: $primary 20%; }
+#help-list { height: 1fr; border: none; background: $surface; padding: 0 1; }
+#help-list:focus { border: none; }
+OptionList > .option-list--option-highlighted { background: $primary 30%; }
+
+#status { height: 1; background: $panel; }
+#hint { width: 1fr; height: 1; padding: 0 1; text-wrap: nowrap; text-overflow: ellipsis; }
+#pos { width: auto; height: 1; padding: 0 1; color: $text-muted; }
+
+/* ---------- narrow (phone) layout: one view at a time ---------- */
+Screen.-narrow #side { display: none; }
+Screen.-narrow #bottom { display: none; }
+Screen.-narrow.-view-regs #side { display: block; width: 1fr; }
+Screen.-narrow.-view-regs #main { display: none; }
+Screen.-narrow.-view-io #body { display: none; }
+Screen.-narrow.-view-io #bottom { display: block; height: 1fr; }
+
+/* ---------- focus mode (editing): the editor gets the whole screen ---------- */
+Screen.-wide.-focus #side { display: none; }
+Screen.-wide.-focus #bottom { display: none; }
+/* ---------- zen mode and optional chrome ---------- */
+Screen.-zen #tabs { display: none; }
+Screen.-zen #status { display: none; }
+Screen.-nostatus #status { display: none; }

@@ -1,0 +1,10 @@
+{
+  "name": "MARS IDE",
+  "short_name": "MARS",
+  "description": "MIPS assembler and runtime simulator (MARS 4.5 engine)",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#0a0a0a",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Seed an empty workspace with the examples, then start the TUI (default) or the web UI (`web`).
+if [ -z "$(ls -A /work 2>/dev/null | grep -v '^\.mars-tui$')" ]; then
+  cp -r /app/examples/. /work/ 2>/dev/null || true
+fi
+exec python -m mars_tui "$@"

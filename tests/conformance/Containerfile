@@ -1,0 +1,5 @@
+# Conformance test runner: original MARS (oracle) + our desktop engine (Java) + our browser engine (Node)
+FROM docker.io/library/node:22-slim AS node
+FROM docker.io/library/eclipse-temurin:21-jdk-jammy
+RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
+COPY --from=node /usr/local/bin/node /usr/local/bin/node

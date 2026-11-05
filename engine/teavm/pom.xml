@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>marsx</groupId>
+  <artifactId>mars-engine-web</artifactId>
+  <version>1.0</version>
+  <packaging>jar</packaging>
+  <properties>
+    <teavm.version>0.16.0</teavm.version>
+    <maven.compiler.release>11</maven.compiler.release>
+    <teavm.minify>true</teavm.minify>
+    <project.build.sourceEncoding>ISO-8859-1</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.teavm</groupId><artifactId>teavm-classlib</artifactId><version>${teavm.version}</version><scope>provided</scope></dependency>
+    <dependency><groupId>org.teavm</groupId><artifactId>teavm-jso</artifactId><version>${teavm.version}</version><scope>provided</scope></dependency>
+  </dependencies>
+  <build>
+    <sourceDirectory>${staged.src}</sourceDirectory>
+    <resources><resource><directory>${staged.res}</directory></resource></resources>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.13.0</version>
+        <configuration><compilerArgs><arg>-nowarn</arg></compilerArgs></configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.teavm</groupId><artifactId>teavm-maven-plugin</artifactId><version>${teavm.version}</version>
+        <executions>
+          <execution>
+            <id>web</id>
+            <goals><goal>compile</goal></goals>
+            <phase>process-classes</phase>
+            <configuration>
+              <mainClass>marsx.web.TeaMain</mainClass>
+              <targetType>${teavm.target}</targetType>
+              <targetDirectory>${project.build.directory}/teavm</targetDirectory>
+              <targetFileName>${teavm.file}</targetFileName>
+              <minifying>${teavm.minify}</minifying>
+              <optimizationLevel>ADVANCED</optimizationLevel>
+              <sourceMapsGenerated>false</sourceMapsGenerated>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

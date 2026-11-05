@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#0a0a0a">
+<meta name="color-scheme" content="dark light">
+<title>MARS IDE</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app" class="app" data-m="edit">
+  <header class="topbar">
+    <button class="icon-btn hidden" id="btn-back" title="Back (Alt+←)" aria-label="Back"></button>
+    <button class="icon-btn" id="btn-side" title="Files (Ctrl+B)" aria-label="Files"></button>
+    <div class="brand"><b>MARS</b></div>
+    <nav class="tabs" id="tabs"></nav>
+    <span class="sep"></span>
+    <div class="filetabs" id="filetabs"></div>
+    <div class="mobile-title" id="mtitle"></div>
+    <div class="runbar" id="runbar"></div>
+    <span class="pill" id="pill">edit</span>
+    <button class="icon-btn" id="btn-panels" title="Toggle console &amp; registers (Ctrl+J)" aria-label="Toggle panels"></button>
+    <button class="icon-btn" id="btn-fs" title="Fullscreen" aria-label="Fullscreen"></button>
+    <button class="icon-btn" id="btn-zen" title="Zen mode — only code (F10)" aria-label="Zen mode"></button>
+    <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings"></button>
+  </header>
+
+  <div class="workspace">
+    <aside class="sidebar" id="sidebar">
+      <div class="side-head"><span class="grow">Workspace</span>
+        <button class="icon-btn" id="btn-newfile" title="New file"></button>
+        <button class="icon-btn" id="btn-newdir" title="New folder"></button>
+        <button class="icon-btn" id="btn-import" title="Import files, folders or .zip (Ctrl+O) — or drop them anywhere"></button>
+        <button class="icon-btn" id="btn-export" title="Export workspace as .zip"></button>
+        <button class="icon-btn" id="btn-refresh" title="Refresh"></button>
+      </div>
+      <div class="tree scroll" id="tree"></div>
+    </aside>
+
+    <main class="center">
+      <div class="views">
+        <section class="view" data-view="edit">
+          <div id="editor" class="ed"></div>
+        </section>
+        <section class="view" data-view="exec">
+          <div class="toolbar" id="exec-bar"></div>
+          <div class="tablewrap scroll" id="exec-wrap"></div>
+        </section>
+        <section class="view" data-view="mem">
+          <div class="toolbar" id="mem-bar"></div>
+          <div class="tablewrap scroll" id="mem-wrap"></div>
+        </section>
+        <section class="view" data-view="labels">
+          <div class="search"><input id="label-filter" placeholder="Filter labels…" autocomplete="off"></div>
+          <div class="tablewrap scroll" id="label-wrap"></div>
+        </section>
+        <section class="view" data-view="tools">
+          <div class="subtabs" id="tool-tabs"></div>
+          <div class="view-body" id="tool-body" style="display:flex;flex-direction:column;flex:1;min-height:0"></div>
+        </section>
+        <section class="view" data-view="help">
+          <div class="subtabs" id="help-tabs"></div>
+          <div class="search" id="help-search"><input id="help-filter" placeholder="Search instructions, directives, syscalls…" autocomplete="off"></div>
+          <div class="help-list scroll" id="help-list"></div>
+        </section>
+      </div>
+      <div class="splitter-h" id="split-h"></div>
+      <section class="console" id="console">
+        <div class="subtabs" id="io-tabs"></div>
+        <pre class="out scroll" id="out"></pre>
+        <div class="msgs scroll hidden" id="msgs"></div>
+        <div class="inrow" id="inrow"><span class="prompt" id="inprompt">stdin</span>
+          <input id="stdin" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" placeholder="Program input — press Enter"></div>
+      </section>
+    </main>
+
+    <div class="splitter-v" id="split-v"></div>
+    <aside class="regs" id="regs">
+      <div class="subtabs" id="reg-tabs"></div>
+      <div class="tablewrap scroll" id="reg-wrap"></div>
+    </aside>
+  </div>
+
+  <footer class="statusbar">
+    <span class="hint" id="hint"></span>
+    <span id="pos"></span>
+    <span class="wide" id="pcinfo"></span>
+    <span class="conn off" id="conn">engine</span>
+  </footer>
+  <div class="keybar" id="keybar" role="toolbar" aria-label="Editing keys"></div>
+  <nav class="bottomnav" id="bottomnav"></nav>
+</div>
+<button id="zen-exit" class="zen-exit" title="Exit zen mode (F10)" aria-label="Exit zen mode">⤢</button>
+<div class="dropzone" id="dropzone"><div><b>Drop to import</b><span>files, folders or a .zip — into <span id="drop-dir">the workspace</span></span></div></div>
+<input type="file" id="file-input" multiple hidden>
+<div id="modals"></div>
+<div class="toasts" id="toasts"></div>
+<script src="js/mips.js"></script>
+<script src="js/refcard.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/files.js"></script>
+<script src="js/editor.js"></script>
+<script src="js/meaning.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

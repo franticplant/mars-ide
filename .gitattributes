@@ -1,0 +1,22 @@
+# Text is stored with LF line endings everywhere.
+* text=auto eol=lf
+
+# Shell scripts must stay LF even on Windows checkouts (they run in containers).
+*.sh text eol=lf
+container/mars-entry text eol=lf
+
+# MARS's own resource files, copied byte for byte from Mars4_5.jar (CRLF).
+# Kept exactly as shipped so the headless core matches the original.
+engine/resources/** -text
+
+# Binaries
+*.jar binary
+*.pdf binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.zip binary
+*.tar binary
+*.apk binary
+*.keystore binary
+*.jks binary

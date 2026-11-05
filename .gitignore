@@ -1,0 +1,43 @@
+.claude/settings.local.json
+
+# Build outputs (./build-all.sh, engine/teavm, web/static)
+/build/
+/dist/
+engine/teavm/target/
+
+# Container-side caches: Maven repository for TeaVM
+/.cache/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Test output: screenshots, profiles
+tests/shots/
+tests/node/prof/
+*.cpuprofile
+*.hprof
+
+# Signing keys and secrets, never committed
+*.keystore
+*.jks
+signing.properties
+
+# Reference card of unknown license: drop your own copy here, see
+# docs/building.md ("Reference card").
+
+# Local workspaces and settings of the IDE itself
+.mars-tui/
+/mars-workspace/
+/work/
+
+# Local environment files (MARS_WEB_TOKEN and the like)
+.env
+*.env
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
