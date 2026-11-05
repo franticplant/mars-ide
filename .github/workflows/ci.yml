@@ -1,0 +1,181 @@
+name: CI
+
+# Builds and tests exactly as on a developer machine: every step runs in podman containers
+# (preinstalled on the Ubuntu runners) through build-all.sh and scripts/, so the runner only
+# needs podman and python3.
+#
+#   conformance  engine jar + TeaVM engine, then the differential conformance suite: every
+#                program in tests/conformance/progs on the original MARS 4.5 jar (the oracle),
+#                the desktop engine and the browser engine must agree exactly
+#   tui          Textual pilot tests against the real engine
+#   web          Chromium + Playwright tests of the web UI (server and static builds)
+#   images       the static site and the container images for amd64 + arm64; the images
+#                have no RUN steps, so the arm64 build needs no QEMU. Nothing is pushed.
+
+on:
+  push:
+    branches:
+      - main
+      - "release-branch/*"
+  pull_request:
+    # all PRs on all branches
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  conformance:
+    name: Engine and conformance suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    if: "!contains(github.event.head_commit.message, '[ci skip]')"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Maven repository of the TeaVM build (engine/teavm/build-teavm.sh mounts .cache/m2).
+      - name: Cache Maven repository
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/m2
+          key: m2-${{ runner.os }}-${{ hashFiles('engine/teavm/pom.xml') }}
+          restore-keys: m2-${{ runner.os }}-
+
+      # Builds build/mars-engine.jar and engine/teavm/target/teavm/mars-engine.js, then runs
+      # tests/conformance/run.py in the mars-conformance image (Java + Node + Python).
+      - name: Build engines and run the conformance suite
+        run: make test
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: engine-${{ github.sha }}
+          path: |
+            build/mars-engine.jar
+            engine/teavm/target/teavm/mars-engine.js
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          {
+            echo "### Engine"
+            echo "- desktop/server: \`$(du -h build/mars-engine.jar | cut -f1)\` build/mars-engine.jar"
+            echo "- browser (TeaVM): \`$(du -h engine/teavm/target/teavm/mars-engine.js | cut -f1)\` mars-engine.js"
+            echo "- oracle: vendor/Mars4_5.jar \`$(sha256sum vendor/Mars4_5.jar | cut -c1-16)…\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tui:
+    name: TUI tests
+    needs: conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: engine-${{ github.sha }}
+
+      - name: Install Textual
+        run: make pylib
+
+      - name: TUI tests
+        run: make test-tui
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tui-logs-${{ github.sha }}
+          path: build/test-tui-*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  web:
+    name: Browser tests
+    needs: conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: engine-${{ github.sha }}
+
+      - name: Build the static site
+        run: SKIP_TEAVM=1 ./build-all.sh static
+
+      - name: Browser tests
+        run: make test-web
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-shots-${{ github.sha }}
+          path: |
+            tests/shots/
+            build/test-web-*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  images:
+    name: Static site and container images
+    needs: conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: engine-${{ github.sha }}
+
+      - name: Install Textual
+        run: make pylib
+
+      - name: Build the static site
+        run: SKIP_TEAVM=1 ./build-all.sh static
+
+      # jlink'd runtimes from the amd64/arm64 JDK images, then images with COPY steps only.
+      - name: Build mars-ide (amd64 + arm64)
+        run: ARCHES="amd64 arm64" bash container/build-image.sh
+
+      - name: Build mars-ide-static (amd64 + arm64)
+        run: |
+          podman build -q --platform linux/amd64,linux/arm64 --manifest mars-ide-static:latest \
+            -f container/static/Containerfile .
+
+      - name: Smoke-test the images
+        run: |
+          podman run --rm --entrypoint java localhost/mars-ide:amd64 -version
+          podman run -d --name static -p 127.0.0.1:8081:8080 mars-ide-static:latest
+          for _ in $(seq 20); do curl -fsS http://127.0.0.1:8081/ > /dev/null && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8081/engine/mars-engine.js > /dev/null
+          podman rm -f static
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: static-site-${{ github.sha }}
+          path: build/static/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          {
+            echo "### Builds"
+            echo "- static site: \`$(du -sh build/static | cut -f1)\`"
+            echo "- phone archive: \`$(du -h build/mars-ide-arm64.tar | cut -f1)\` (not uploaded)"
+            podman images --format '- `{{.Repository}}:{{.Tag}}` {{.Size}}' | grep mars-ide
+          } >> "$GITHUB_STEP_SUMMARY"

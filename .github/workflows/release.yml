@@ -1,0 +1,176 @@
+name: Release
+
+# Builds a release from a tag, runs the conformance suite on it, attests the files (SLSA build
+# provenance via Sigstore) and publishes them as a GitHub release. Anyone can check a download:
+#   gh attestation verify <file> -R <owner>/<repo>
+#
+# Assets:
+#   mars-engine-<tag>.jar            engine + web server + web UI (java -jar …, Java 11+)
+#   mars-ide-static-<tag>.tar.gz     the static site: copy to any static file host
+#   mars-ide-<tag>-arm64.tar         OCI archive of the arm64 image (podman load -i …)
+#   SHA256SUMS
+# Images, multi-arch (amd64 + arm64), pushed to the GitHub container registry:
+#   ghcr.io/<owner>/mars-ide:<tag>, ghcr.io/<owner>/mars-ide-static:<tag>
+#
+# Triggered by pushing a tag like v0.1.0, or manually for an existing tag. Tags with a suffix
+# (v0.2.0-rc1) and every v0.x release are marked pre-release.
+#
+# Release notes come from docs/release-notes/<tag>.md at the tag, so write that before
+# tagging; without it, GitHub's generated notes are used. Build details are appended either way.
+#
+# Not yet run: written for the first release; check the first run closely.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish (e.g. v0.1.0)
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: Build, test and attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write # ghcr.io images
+      id-token: write # Sigstore signing certificate for attestations
+      attestations: write
+    outputs:
+      sha: ${{ steps.head.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+
+      - id: head
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build engines and run the conformance suite
+        run: make test
+
+      - name: Build the static site and the images
+        run: |
+          make pylib
+          SKIP_TEAVM=1 ./build-all.sh static
+          ARCHES="amd64 arm64" bash container/build-image.sh
+          podman build -q --platform linux/amd64,linux/arm64 --manifest mars-ide-static:latest \
+            -f container/static/Containerfile .
+
+      - name: Collect release files
+        run: |
+          mkdir -p dist
+          cp build/mars-engine.jar "dist/mars-engine-$TAG.jar"
+          tar -C build -czf "dist/mars-ide-static-$TAG.tar.gz" --owner=0 --group=0 --numeric-owner static
+          cp build/mars-ide-arm64.tar "dist/mars-ide-$TAG-arm64.tar"
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      - name: Push images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          owner=${GITHUB_REPOSITORY_OWNER,,}
+          echo "$GH_TOKEN" | podman login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          podman manifest push --all mars-ide:latest "docker://ghcr.io/$owner/mars-ide:$TAG"
+          podman manifest push --all mars-ide-static:latest "docker://ghcr.io/$owner/mars-ide-static:$TAG"
+          if [[ "$TAG" != *-* ]]; then
+            podman manifest push --all mars-ide:latest "docker://ghcr.io/$owner/mars-ide:latest"
+            podman manifest push --all mars-ide-static:latest "docker://ghcr.io/$owner/mars-ide-static:latest"
+          fi
+          podman logout ghcr.io
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ env.TAG }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+          sparse-checkout: docs/release-notes
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ env.TAG }}
+          path: dist
+
+      # The artifact round-trip must not have changed anything that was attested.
+      - name: Verify attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && sha256sum -c SHA256SUMS)
+          for f in dist/*; do
+            [[ $(basename "$f") == SHA256SUMS ]] && continue
+            gh attestation verify "$f" -R "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" > /dev/null
+            echo "verified: $f"
+          done
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUILD_SHA: ${{ needs.build.outputs.sha }}
+        run: |
+          prerelease=""
+          if [[ "$TAG" == *-* || "$TAG" == v0.* ]]; then prerelease="--prerelease"; fi
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::error::$TAG is already released; releases are immutable. Cut a new tag."
+            exit 1
+          fi
+          gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$TAG" --jq .body > generated.md
+          if [[ -f "docs/release-notes/$TAG.md" ]]; then
+            { cat "docs/release-notes/$TAG.md"; echo; grep -m1 'Full Changelog' generated.md || true; } > notes.md
+          else
+            echo "::warning::docs/release-notes/$TAG.md not found; using GitHub's generated notes."
+            mv generated.md notes.md
+          fi
+          owner=${GITHUB_REPOSITORY_OWNER,,}
+          {
+            echo
+            echo "---"
+            echo "Built by GitHub Actions from \`$BUILD_SHA\`; the conformance suite passed on it."
+            echo
+            echo "Images: \`ghcr.io/$owner/mars-ide:$TAG\` and \`ghcr.io/$owner/mars-ide-static:$TAG\` (amd64 + arm64)."
+            echo
+            echo "Every file has a signed build-provenance attestation. To verify a download:"
+            echo
+            echo "    gh attestation verify <file> -R $GH_REPO"
+            echo
+            echo "or compare it against \`SHA256SUMS\`."
+          } >> notes.md
+          gh release create "$TAG" dist/* $prerelease --verify-tag --title "$TAG" --notes-file notes.md

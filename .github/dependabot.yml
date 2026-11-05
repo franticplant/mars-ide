@@ -1,0 +1,23 @@
+# Keeps the pinned action SHAs and the TeaVM build moving. The container base images and the
+# Textual pin (build-all.sh) are bumped by hand: run `make test-all` after a bump.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: ".github:"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: "maven"
+    directory: "/engine/teavm"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "engine:"
+    groups:
+      teavm:
+        patterns: ["org.teavm*"]
