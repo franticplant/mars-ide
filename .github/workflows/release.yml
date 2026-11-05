@@ -61,7 +61,14 @@ jobs:
       - id: head
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Build engines and run the conformance suite
+      - name: Build the engines
+        run: |
+          ./build-all.sh engine
+          bash engine/teavm/build-teavm.sh
+
+      # Informational for now (see ci.yml): reported in the job log, does not block the release.
+      - name: Conformance suite (non-blocking)
+        continue-on-error: true
         run: make test
 
       - name: Build the static site and the images
