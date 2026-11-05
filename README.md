@@ -197,7 +197,7 @@ Commit style, branches, tests to run and the rules for agents: [CONTRIBUTING.md]
 
 Bugs and ideas: [open an issue](https://github.com/franticplant/mars-ide/issues) or start a
 [discussion](https://github.com/franticplant/mars-ide/discussions). Anything else:
-franticplant@protonmail.com.
+franticplant@pm.me.
 
 ## License
 
