@@ -27,7 +27,8 @@ html = html.replace('<script src="js/mips.js"></script>',
 html = html.replace("</body>", '<script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});</script>\n</body>')
 idx.write_text(html, encoding="utf-8")
 # offline cache: every file, versioned by content
-files = sorted(str(p.relative_to(out)).replace(os.sep, "/") for p in out.rglob("*") if p.is_file())
+# social.png is only for link previews (og:image), not needed offline
+files = sorted(f for f in (str(p.relative_to(out)).replace(os.sep, "/") for p in out.rglob("*") if p.is_file()) if f != "social.png")
 ver = hashlib.sha256(b"".join((out / f).read_bytes() for f in files)).hexdigest()[:12]
 sw = f"""/* offline cache for the static MARS IDE — generated */
 const CACHE = "mars-ide-{ver}";
