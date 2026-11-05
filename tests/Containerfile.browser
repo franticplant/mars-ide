@@ -1,0 +1,8 @@
+# Browser end-to-end tests (tests/web_*.py, tests/static_e2e.py): Chromium + Playwright for
+# Python + a JRE for the engine's web server. Built by scripts/test-web.sh as mars-browser.
+FROM docker.io/library/debian:trixie
+RUN apt-get update && apt-get install -y --no-install-recommends chromium python3 python3-pip python3-venv \
+      fonts-dejavu-core fonts-noto-color-emoji default-jre-headless ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /venv && /venv/bin/pip install -q playwright==1.64.1
+ENV PATH=/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
