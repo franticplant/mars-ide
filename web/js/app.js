@@ -2047,8 +2047,11 @@
       h = `<div class="about"><h2>MARS IDE</h2>
         A modern front end for <b>MARS ${esc(R.version || "4.5")}</b> — the MIPS Assembler and Runtime Simulator by Pete Sanderson and Kenneth Vollmar (MIT license,
         <a href="https://dpetersanderson.github.io/" target="_blank" rel="noopener" style="color:var(--primary)">dpetersanderson.github.io</a>).
-        The original MARS engine assembles and simulates your code; this UI talks to it over a small JSON protocol, the same one used by the terminal (TUI) version and the Android app.<br><br>
-        Dialog syscalls (50–59) open dialogs here; MIDI syscalls (31, 33) play through your speakers.</div>`;
+        The original MARS engine assembles and simulates your code; this UI talks to it over a small JSON protocol, the same one used by the terminal (TUI) version.<br><br>
+        Dialog syscalls (50–59) open dialogs here; MIDI syscalls (31, 33) play through your speakers.
+        <div style="margin-top:18px;color:var(--muted);font-size:12px">
+        Source and issues: <a href="https://github.com/franticplant/mars-ide" target="_blank" rel="noopener" style="color:inherit">github.com/franticplant/mars-ide</a><br>
+        Contact: <a href="mailto:franticplant.human087@passinbox.com" style="color:inherit">franticplant.human087@passinbox.com</a></div></div>`;
     }
     el.innerHTML = h;
   }

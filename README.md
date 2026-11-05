@@ -193,6 +193,12 @@ docs/         architecture, building, testing, releasing, release notes
 
 Commit style, branches, tests to run and the rules for agents: [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Contact
+
+Bugs and ideas: [open an issue](https://github.com/franticplant/mars-ide/issues) or start a
+[discussion](https://github.com/franticplant/mars-ide/discussions). Anything else:
+franticplant.human087@passinbox.com.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). MARS 4.5 is © 2003-2013 Pete Sanderson and Kenneth Vollmar, MIT
