@@ -2051,7 +2051,7 @@
         Dialog syscalls (50–59) open dialogs here; MIDI syscalls (31, 33) play through your speakers.
         <div style="margin-top:18px;color:var(--muted);font-size:12px">
         Source and issues: <a href="https://github.com/franticplant/mars-ide" target="_blank" rel="noopener" style="color:inherit">github.com/franticplant/mars-ide</a><br>
-        Contact: <a href="mailto:franticplant.human087@passinbox.com" style="color:inherit">franticplant.human087@passinbox.com</a></div></div>`;
+        Contact: <a href="mailto:franticplant@protonmail.com" style="color:inherit">franticplant@protonmail.com</a></div></div>`;
     }
     el.innerHTML = h;
   }
