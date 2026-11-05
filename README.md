@@ -2,6 +2,13 @@
 
 **MARS — the MIPS Assembler and Runtime Simulator — reworked for the browser, with a terminal UI too.**
 
+**Try it: <https://franticplant.github.io/mars-ide/>** (runs entirely in your browser, works offline)
+
+<p align="center">
+  <img src="docs/images/desktop.png" alt="MARS IDE on a desktop: editor with MIPS syntax highlighting, console output, and the register panel with a hint card for $v0" width="77%">
+  <img src="docs/images/mobile.png" alt="MARS IDE on a phone: editor with the bottom navigation bar" width="19.5%">
+</p>
+
 MARS IDE puts the real MARS 4.5 assembler and simulator behind modern front ends:
 
 - **In the browser:** the engine is compiled to JavaScript and runs in a Web Worker. There is
