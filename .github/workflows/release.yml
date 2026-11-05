@@ -52,6 +52,7 @@ jobs:
       attestations: write
     outputs:
       sha: ${{ steps.head.outputs.sha }}
+      conformance: ${{ steps.conformance.outcome }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -68,6 +69,7 @@ jobs:
 
       # Informational for now (see ci.yml): reported in the job log, does not block the release.
       - name: Conformance suite (non-blocking)
+        id: conformance
         continue-on-error: true
         run: make test
 
@@ -152,6 +154,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           BUILD_SHA: ${{ needs.build.outputs.sha }}
+          CONFORMANCE: ${{ needs.build.outputs.conformance }}
         run: |
           prerelease=""
           if [[ "$TAG" == *-* || "$TAG" == v0.* ]]; then prerelease="--prerelease"; fi
@@ -170,7 +173,9 @@ jobs:
           {
             echo
             echo "---"
-            echo "Built by GitHub Actions from \`$BUILD_SHA\`; the conformance suite passed on it."
+            if [[ "$CONFORMANCE" == success ]]; then verdict="the conformance suite passed on it"
+            else verdict="the conformance suite did not pass on this build (informational for now; see the workflow log)"; fi
+            echo "Built by GitHub Actions from \`$BUILD_SHA\`; $verdict."
             echo
             echo "Images: \`ghcr.io/$owner/mars-ide:$TAG\` and \`ghcr.io/$owner/mars-ide-static:$TAG\` (amd64 + arm64)."
             echo
