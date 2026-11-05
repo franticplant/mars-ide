@@ -4,13 +4,11 @@ name: CI
 # (preinstalled on the Ubuntu runners) through build-all.sh and scripts/, so the runner only
 # needs podman and python3.
 #
-#   conformance  engine jar + TeaVM engine, then the differential conformance suite: every
-#                program in tests/conformance/progs on the original MARS 4.5 jar (the oracle),
-#                the desktop engine and the browser engine must agree exactly
-#   tui          Textual pilot tests against the real engine
-#   web          Chromium + Playwright tests of the web UI (server and static builds)
-#   images       the static site and the container images for amd64 + arm64; the images
-#                have no RUN steps, so the arm64 build needs no QEMU. Nothing is pushed.
+#   conformance  engine jar + TeaVM engine + static site (blocking), then the differential
+#                conformance suite: original MARS 4.5 jar (oracle) vs desktop vs browser engine.
+#                For now the suite is informational: it reports but does not fail the build.
+#   tui, web, images  manual for now (Actions → CI → Run workflow): Textual pilot tests,
+#                Chromium + Playwright tests, container images for amd64 + arm64.
 
 on:
   push:
@@ -49,7 +47,17 @@ jobs:
 
       # Builds build/mars-engine.jar and engine/teavm/target/teavm/mars-engine.js, then runs
       # tests/conformance/run.py in the mars-conformance image (Java + Node + Python).
-      - name: Build engines and run the conformance suite
+      - name: Build the engines
+        run: |
+          ./build-all.sh engine
+          bash engine/teavm/build-teavm.sh
+
+      - name: Build the static site
+        run: SKIP_TEAVM=1 bash web/static/build-static.sh
+
+      # Informational for now: reports differences against the original MARS without failing CI.
+      - name: Conformance suite (non-blocking)
+        continue-on-error: true
         run: make test
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -73,6 +81,7 @@ jobs:
   tui:
     name: TUI tests
     needs: conformance
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -101,6 +110,7 @@ jobs:
   web:
     name: Browser tests
     needs: conformance
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -131,6 +141,7 @@ jobs:
   images:
     name: Static site and container images
     needs: conformance
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

@@ -40,6 +40,7 @@ for f in Path(sys.argv[1]).glob("*.java"):
     if out != src:
         f.write_text(out, encoding="latin-1"); print("teavm: removed locks in", f.name)
 PY
+mkdir -p .cache/m2      # podman refuses to mount a path that does not exist (fresh checkouts)
 podman run --rm -v "$PWD":/w:z -v "$PWD/.cache/m2":/root/.m2:z -w /w/engine/teavm docker.io/library/maven:3.9-eclipse-temurin-21 \
   mvn -q -B package -Dstaged.src=/w/$STAGE/src -Dstaged.res=/w/$STAGE/res -Dteavm.target=$TARGET -Dteavm.file=$FILE -Dteavm.minify=${MINIFY:-true} \
       -DskipTests -Dmaven.test.skip=true 2>&1 | { grep -vE "^\[INFO\]|Download" || true; } | tail -60
