@@ -9,12 +9,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT=$PWD
+source scripts/container-user.sh
 JDK_IMAGE=${JDK_IMAGE:-docker.io/library/eclipse-temurin:21-jdk-jammy}
 PY_IMAGE=${PY_IMAGE:-docker.io/library/python:3.12-slim}
 
 engine() {
-  python3 engine/patch_core.py vendor/Mars4_5.jar build/core-src
-  podman run --rm -v "$ROOT":/w:z -w /w "$JDK_IMAGE" sh -ec '
+  bash scripts/build-web.sh
+  podman_run -v "$ROOT":/w:z -w /w "$PY_IMAGE" sh -ec '
+    python3 engine/patch_core.py vendor/Mars4_5.jar build/core-src'
+  podman_run -v "$ROOT":/w:z -w /w "$JDK_IMAGE" sh -ec '
     rm -rf build/engine-classes build/desktop-classes && mkdir -p build/engine-classes build/desktop-classes
     find build/core-src/java engine/src -name "*.java" > build/engine-sources.txt
     javac -nowarn -encoding latin1 --release 11 -d build/engine-classes @build/engine-sources.txt 2>&1 | grep -v "^Note:" || true
@@ -31,7 +34,8 @@ engine() {
 }
 
 pylib() {
-  podman run --rm -v "$ROOT":/w:z "$PY_IMAGE" sh -ec '
+  mkdir -p .cache/pip
+  podman_run -v "$ROOT":/w:z -v "$ROOT/.cache/pip":/pip-cache:z -e PIP_CACHE_DIR=/pip-cache "$PY_IMAGE" sh -ec '
     rm -rf /w/build/pylib && pip install -q --root-user-action=ignore --disable-pip-version-check --target /w/build/pylib "textual==8.2.8"
     python -m compileall -q /w/build/pylib >/dev/null || true
     echo "pylib: $(du -sh /w/build/pylib | cut -f1)"'
@@ -44,8 +48,8 @@ case "${1:-all}" in
   test)
     engine; bash engine/teavm/build-teavm.sh
     podman image exists mars-conformance || podman build -q -t mars-conformance -f tests/conformance/Containerfile tests/conformance
-    podman run --rm -v "$ROOT/vendor":/v:z -v "$ROOT/build":/b:z -v "$ROOT/engine/teavm/target/teavm":/e:z \
-      -v "$ROOT/tests/conformance":/c:z mars-conformance python3 /c/run.py ;;
+    podman_run -v "$ROOT/vendor":/v:ro,z -v "$ROOT/build":/b:z -v "$ROOT/engine/teavm/target/teavm":/e:ro,z \
+      -v "$ROOT/tests/conformance":/c:z mars-conformance sh -ec 'exec python3 /c/run.py' ;;
   image) bash container/build-image.sh ;;
   all) engine; [ -d build/pylib ] || pylib; bash web/static/build-static.sh; bash container/build-image.sh ;;
   *) echo "unknown target $1"; exit 2 ;;

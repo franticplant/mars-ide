@@ -43,6 +43,8 @@
     fs: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
     fsexit: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>',
     panels: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h12M15 4v16"/>',
+    panelConsole: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h18"/>',
+    panelRegs: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/>',
   };
   const icon = (n, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24">${(IC[n] || "").replace('class="f"', 'fill="currentColor"')}</svg>`;
 
@@ -53,10 +55,23 @@
     pseudo: true, delayed_branching: false, self_modifying: false, warnings_are_errors: false, start_at_main: false,
     bare_machine: false, assemble_all: false, autosave: true, program_args: "", exception_handler: "", memory_config: "Default",
     bitmap: { uw: 8, uh: 8, w: 512, h: 256, base: "data" }, regsW: 330, consoleH: 32, side: false, panels: false, zen: false, hideZero: false, kbSize: "m", kbRows: 1, statusbar: true, lineNumbers: true, keybarOn: true,
-    open: [], current: null, bps: {}, view: "edit", m: "edit",
+    open: [], current: null, bps: {}, view: "edit", m: "edit", layout: null, zenReturn: null, emacs: false, scopeValues: 0, hideRegs: false, hideConsole: false,
   };
   const saved = (() => { try { return JSON.parse(localStorage.getItem(LS) || "{}"); } catch (e) { return {}; } })();
   const S = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), saved);
+  // A reload must never strand a phone in a chrome-free workspace, including
+  // settings saved by older versions that lack a return snapshot.
+  if (S.zen && S.zenReturn && typeof S.zenReturn === "object") {
+    const previous = S.zenReturn;
+    if (["edit", "exec", "mem", "labels", "tools", "help"].includes(previous.view)) S.view = previous.view;
+    if (["edit", "exec", "mem", "labels", "tools", "help", "regs", "io", "files"].includes(previous.m)) S.m = previous.m;
+    if (typeof previous.side === "boolean") S.side = previous.side;
+    if (typeof previous.panels === "boolean") S.panels = previous.panels;
+    if (typeof previous.hideRegs === "boolean") S.hideRegs = previous.hideRegs;
+    if (typeof previous.hideConsole === "boolean") S.hideConsole = previous.hideConsole;
+  }
+  S.zen = false; S.zenReturn = null;
+  const initialLayout = saved.layout;
   S.bitmap = Object.assign({}, DEFAULTS.bitmap, saved.bitmap || {});
   const persist = () => {
     const keep = {};
@@ -89,6 +104,17 @@
     }
     const b = document.getElementById("btn-panels");
     if (b) b.style.color = S.panels ? "var(--primary)" : "";
+    app.classList.toggle("hide-regs", !!S.hideRegs);
+    app.classList.toggle("hide-console", !!S.hideConsole);
+    for (const [id, hidden, label] of [["btn-regs", S.hideRegs, "registers"], ["btn-console", S.hideConsole, "console"]]) {
+      const button = document.getElementById(id);
+      if (!button) continue;
+      const visible = !on && !hidden;
+      button.title = `${visible ? "Hide" : "Show"} ${label}`;
+      button.setAttribute("aria-label", button.title);
+      button.setAttribute("aria-pressed", String(visible));
+      button.style.color = visible ? "var(--primary)" : "";
+    }
   }
   const fsSupported = () => !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
   const isFs = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
@@ -100,9 +126,27 @@
   }
   let zenFs = false;
   function setZen(v) {
-    S.zen = v; persist(); applyTheme();
-    if (v) { zenFs = !isFs(); if (zenFs) setFullscreen(true); toast("Zen mode — F10, Esc or ⤢ to exit", "", 1800); }
-    else if (zenFs) { zenFs = false; setFullscreen(false); }
+    v = !!v;
+    if (v === S.zen) return;
+    if (v) {
+      S.zenReturn = { view: S.view, m: S.m, side: S.side, panels: S.panels, hideRegs:S.hideRegs, hideConsole:S.hideConsole };
+      S.zen = true;
+      setView("edit");
+      zenFs = fsSupported() && !isFs();
+      if (zenFs) setFullscreen(true);
+      toast("Zen mode — use Exit Zen to return", "", 1800);
+    } else {
+      const previous = S.zenReturn; S.zen = false; S.zenReturn = null;
+      if (zenFs) { zenFs = false; setFullscreen(false); }
+      if (previous) {
+        S.side = previous.side; S.panels = previous.panels;
+        if (typeof previous.hideRegs === "boolean") S.hideRegs = previous.hideRegs;
+        if (typeof previous.hideConsole === "boolean") S.hideConsole = previous.hideConsole;
+        setView(previous.view);
+        if (isNarrow() && previous.m !== previous.view) setM(previous.m);
+      }
+    }
+    persist(); applyTheme(); updateFocus(); fitViewport();
     setTimeout(() => ed.measure(), 150);
   }
   document.addEventListener("fullscreenchange", () => {
@@ -111,7 +155,25 @@
     if (!isFs() && S.zen && zenFs) { zenFs = false; setZen(false); }   // Esc left fullscreen → leave zen too
     setTimeout(() => ed.measure(), 150);
   });
-  function showPanels(v = true) { if (S.panels !== v) { S.panels = v; persist(); updateFocus(); } }
+  function showPanels(v = true) { if (S.panels !== v) { S.panels = v; persist(); updateFocus(); } if (v) tailConsole(); }
+  function toggleAllPanels() {
+    const focused = !isNarrow() && S.view === "edit" && !S.panels;
+    const anyVisible = !focused && (!S.hideRegs || !S.hideConsole);
+    if (anyVisible && S.view === "edit") S.panels = false;
+    else if (anyVisible) { S.hideRegs = true; S.hideConsole = true; }
+    else { S.panels = true; S.hideRegs = false; S.hideConsole = false; }
+    persist(); updateFocus(); setTimeout(() => { ed.measure(); renderRegs(); }, 0);
+  }
+  function togglePanel(which) {
+    const key = which === "regs" ? "hideRegs" : "hideConsole";
+    if (!isNarrow() && S.view === "edit" && !S.panels) {
+      S.panels = true;
+      S.hideRegs = which !== "regs";
+      S.hideConsole = which !== "console";
+    } else S[key] = !S[key];
+    persist(); updateFocus();
+    setTimeout(() => { ed.measure(); renderRegs(); }, 0);
+  }
 
   // ------------------------------------------------------------------ toasts / modals
   function toast(msg, kind = "", ms = 3200) {
@@ -162,10 +224,10 @@
     return { el: bg, close };
   }
 
-  function prompt(title, value = "", placeholder = "") {
+  function prompt(title, value = "", placeholder = "", hint = "") {
     return new Promise(res => {
       modal({
-        title, body: `<input class="text" value="${esc(value)}" placeholder="${esc(placeholder)}" autocapitalize="off" autocomplete="off" spellcheck="false">`,
+        title, body: `${hint ? `<div class="msgtext">${esc(hint)}</div>` : ""}<input class="text" value="${esc(value)}" placeholder="${esc(placeholder)}" autocapitalize="off" autocomplete="off" spellcheck="false">`,
         buttons: [{ label: "Cancel", value: null }, { label: "OK", primary: true, get: bg => $("input", bg).value }],
         onClose: res,
       });
@@ -304,8 +366,8 @@
       ["assemble", "build", "Assemble", "F3", false, ""],
       R.running ? ["pause", "pause", "Pause", "F9", false, "pause"] : ["run", "run", R.assembled && st.count && !R.finished ? "Continue" : "Run", "F5", R.finished, "run"],
       ["step", "step", "Step", "F7", R.running || R.finished, ""],
-      R.running ? ["stop", "stop", "Stop", "F11", false, ""] : ["back", "back", "Back", "F8", !(st.can_backstep && R.assembled), "opt"],
-      ["reset", "reset", "Reset", "F12", !R.assembled, "opt"],
+      R.running ? ["stop", "stop", "Stop", "Shift+F11", false, ""] : ["back", "back", "Back", "F8", !(st.can_backstep && R.assembled), "opt"],
+      ["reset", "reset", "Reset", "Shift+F12", !R.assembled, "opt"],
     ];
     $("#runbar").innerHTML = items.map(([a, ic, lbl, k, dis, cls]) =>
       `<button class="btn ${cls}" data-act="${a}" ${dis ? "disabled" : ""} title="${lbl} (${k})">${icon(ic, ic === "run" ? "fill" : "")}<span class="lbl">${lbl}</span></button>`).join("") +
@@ -374,7 +436,7 @@
     $("#app").dataset.m = m;
     renderBottomNav();
     if (m === "regs") renderRegs();
-    if (m === "io") { const out = $("#out"); out.scrollTop = out.scrollHeight; }
+    if (m === "io") tailConsole();
     persist();
   }
 
@@ -382,6 +444,7 @@
     const items = [["labels", "Labels", "tag"], ["tools", "Tools", "tools"], ["help", "Help & card", "help"],
       ["files", "Files", "folder"], ["settings", "Settings", "gear"], ["save", "Save", "save"], ["zen", "Zen mode", "zen"], ["fs", "Fullscreen", "fs"], ["lines", "Line numbers", "exec"], ["kb", "Key row", "edit"],
       ["import", "Import files", "upload"], ["exportf", "Download file", "download"], ["exportw", "Export all (.zip)", "download"]];
+    if (engine.local) items.push(["history", "File history", "file"], ["fullbackup", "Full backup + history", "download"]);
     const m = modal({
       sheet: true, title: "More",
       body: `<div class="sheet-grid">${items.map(([k, l, ic]) => `<button data-k="${k}">${icon(ic)}${l}</button>`).join("")}</div>`,
@@ -395,6 +458,8 @@
       else if (k === "import") pickFiles();
       else if (k === "exportf") exportFile();
       else if (k === "exportw") exportWorkspace();
+      else if (k === "history") showAllHistory();
+      else if (k === "fullbackup") exportFullBackup();
       else if (k === "kb") { S.keybarOn = !S.keybarOn; persist(); applyTheme(); toast("Key row " + (S.keybarOn ? "on" : "off"), "", 1200); }
       else if (k === "lines") { S.lineNumbers = !S.lineNumbers; persist(); applyTheme(); toast("Line numbers " + (S.lineNumbers ? "on" : "off — code uses the full width"), "", 1600); }
       else if (k === "save") saveCurrent();
@@ -424,11 +489,12 @@
     $("#out").classList.toggle("hidden", R.ioTab !== "run");
     $("#inrow").classList.toggle("hidden", R.ioTab !== "run");
     $("#msgs").classList.toggle("hidden", R.ioTab !== "msg");
+    if (R.ioTab === "run") tailConsole();
   }
 
   // editing key row that sits on top of the on-screen keyboard
   const KB_KEYS = [
-    ["kbd", "⌄", "Hide keyboard"], ["tab", "⇥", "Indent"], ["untab", "⇤", "Dedent"],
+    ["kbd", "⌄", "Hide keyboard"], ["esc", "Esc", "Escape / hide completion"], ["tab", "⇥", "Indent"], ["untab", "⇤", "Dedent"],
     ["left", "←", "Cursor left"], ["right", "→", "Cursor right"], ["up", "↑", "Cursor up"], ["down", "↓", "Cursor down"],
     ["home", "⇱", "Line start"], ["end", "⇲", "Line end"],
     ["$", "$"], [",", ","], ["#", "#"], [":", ":"], ["(", "("], [")", ")"], [".", "."], ["\"", "\""], ["-", "-"], ["+", "+"], ["0x", "0x"],
@@ -456,7 +522,16 @@
   function keyAction(k) {
     const ta = ed.ta;
     switch (k) {
-      case "kbd": ta.blur(); return;
+      case "kbd":
+        ta.blur();
+        try { navigator.virtualKeyboard?.hide(); } catch (_) { }
+        // Android keyboard-dismiss gestures can leave the textarea focused. Re-evaluate
+        // both immediately and after the OS finishes its viewport animation.
+        fitViewport(); setTimeout(fitViewport, 300); setTimeout(fitViewport, 800);
+        return;
+      case "esc":
+        ed.hideCompletion();
+        break;
       case "tab": ed.insert("    "); break;
       case "untab": ed.transformLines(l => l.replace(/^( {1,4}|\t)/, "")); break;
       case "left": case "right": case "up": case "down": case "home": case "end": moveCursor(k); break;
@@ -511,28 +586,48 @@
   // keep the app exactly inside the visible area — works whether the browser
   // shrinks the page for the keyboard or only the visual viewport
   const VK = navigator.virtualKeyboard;
-  if (VK) { try { VK.overlaysContent = true; } catch (e) { } }   // we lay out around the keyboard ourselves
-  const LAYOUT = { mode: "", kb: 0, h: 0 };
+  let vkOverlay = false;
+  if (VK) { try { VK.overlaysContent = true; vkOverlay = VK.overlaysContent === true; } catch (e) { } }
+  const LAYOUT = { mode: "", kb: 0, h: 0, fullH: window.innerHeight, width: window.innerWidth };
   function fitViewport() {
     const app = document.getElementById("app");
+    const previousHeight = LAYOUT.h;
     const vv = window.visualViewport;
     let h = window.innerHeight, top = 0, mode = "window";
     const r = VK && VK.boundingRect;
-    if (VK && r && r.height > 0) {
+    if (vkOverlay && r && r.height > 0 && r.top > 0) {
       // exact: the app ends where the keyboard starts (correct in fullscreen too)
       h = Math.round(r.top); mode = "virtualKeyboard";
-    } else if (VK) {
+    } else if (vkOverlay) {
       h = window.innerHeight; mode = "virtualKeyboard (closed)";
     } else if (vv) {
       h = Math.round(vv.height); top = Math.round(vv.offsetTop); mode = "visualViewport";
     }
     app.style.height = h + "px";
     app.style.transform = top ? `translateY(${top}px)` : "";
+    // Some browsers shrink the layout viewport as well as visualViewport. Remember the
+    // keyboard-free height rather than inferring keyboard visibility from editor focus.
+    if (LAYOUT.width !== window.innerWidth) { LAYOUT.width = window.innerWidth; LAYOUT.fullH = window.innerHeight; }
+    else if (!document.activeElement?.matches("input, textarea") || window.innerHeight > LAYOUT.fullH) {
+      if (window.innerHeight >= LAYOUT.fullH - 80 || !app.classList.contains("keyboard-open")) LAYOUT.fullH = window.innerHeight;
+    }
+    // In overlay mode a zero-sized VirtualKeyboard rect is authoritative: Android
+    // can hide the IME while leaving the textarea focused. Never leave the nav
+    // offscreen because of a remembered full-height estimate in that case.
+    const keyboard = !isNarrow() ? 0 : vkOverlay
+      ? (r && r.height > 0 && r.top > 0 ? Math.max(0, window.innerHeight - h) : 0)
+      : Math.max(0, LAYOUT.fullH - h - top);
+    app.classList.toggle("keyboard-open", keyboard > 80);
+    app.style.setProperty("--keyboard-cover", keyboard + "px");
     LAYOUT.mode = mode; LAYOUT.kb = r ? Math.round(r.height) : 0; LAYOUT.h = h;
     if (window.scrollY) window.scrollTo(0, 0);
     requestAnimationFrame(() => {
       updateKbFade();
-      if (document.activeElement === ed.ta) { const c = ed.cursor; ed.revealLine(c.line); }
+      // Reveal the caret when the usable viewport shrinks (e.g. keyboard opening),
+      // not on every visualViewport scroll: that fights deliberate phone scrolling.
+      if (previousHeight && h < previousHeight && document.activeElement === ed.ta) {
+        const c = ed.cursor; ed.revealLine(c.line);
+      }
     });
   }
   if (VK) VK.addEventListener("geometrychange", fitViewport);
@@ -541,39 +636,200 @@
     window.visualViewport.addEventListener("scroll", fitViewport);
   }
   window.addEventListener("resize", fitViewport);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) fitViewport(); });
+  window.addEventListener("pageshow", () => { fitViewport(); setTimeout(fitViewport, 300); });
   document.addEventListener("fullscreenchange", () => setTimeout(fitViewport, 120));
 
   // ------------------------------------------------------------------ editor & files
-  const ed = new CodeEditor($("#editor"), {
-    onChange: () => {
-      const f = R.files.get(S.current);
+  const editorOptions = {
+    onChange: (editor) => {
+      const path = editor.documentPath;
+      const f = R.files.get(path);
       if (!f) return;
       const was = f.text !== f.saved;
-      f.text = ed.value;
-      if (R.marks.has(S.current)) { R.marks.delete(S.current); ed.setMarks(new Map()); }
+      f.text = editor.value;
+      if (R.marks.has(path)) { R.marks.delete(path); editor.setMarks(new Map()); }
+      if (engine.local) scheduleHistoryDraft(path);
+      groups.refresh();
       if (was !== (f.text !== f.saved)) { renderFileTabs(); renderRunbar(); }
       saveDraftSoon();
     },
     onCursor: (line, col, text) => { $("#pos").textContent = `Ln ${line}, Col ${col}`; R.cursor = { line, col, text }; updateHint(); },
-    onToggleBreakpoint: (line) => toggleBp(S.current, line),
+    onToggleBreakpoint: (line) => { if (S.current && !/\.(md|markdown)$/i.test(S.current)) toggleBp(S.current, line); },
+  };
+  function makeEditor(host) {
+    let editor;
+    editor = new CodeEditor(host, { ...editorOptions, onChange: () => editorOptions.onChange(editor),
+      onInspectToken: (line, col, text, point) => inspectEditorToken(editor, line, col, text, point),
+      onGotoLine: async () => {
+        const value = await prompt("Go to line", String(editor.cursor.line), "line number");
+        const line = parseInt(value, 10);
+        if (Number.isFinite(line) && line > 0) editor.goTo(line);
+      },
+      onCursor: (...args) => { if (editor && editor === ed) editorOptions.onCursor(...args); } });
+    editor.opts.emacs = !!S.emacs;
+    editor.ta.addEventListener("dblclick", () => { if (!editor.plainText && R.assembled && R.state) inspectEditorLine(editor); });
+    editor.ta.addEventListener("focus", () => { $("#app").classList.add("typing"); $("#keybar").classList.toggle("show", isTouch() || !!S.kbDesktop); setTimeout(fitViewport, 250); });
+    editor.ta.addEventListener("blur", () => {
+      setTimeout(() => { if (document.activeElement !== ed.ta) $("#app").classList.remove("typing"); fitViewport(); }, 120);
+      setTimeout(fitViewport, 500);
+    });
+    return editor;
+  }
+  let ed = makeEditor($("#editor"));
+  const groups = new EditorGroups($("#editor-groups"), ed, {
+    editor: makeEditor, file: p => R.files.get(p), dirty: p => isDirty(p), stash: stashView,
+    canInspect: path => !!(R.assembled && R.state && path && !/\.(md|markdown)$/i.test(path)),
+    inspectLine: inspectEditorLine,
+    decorate: (editor, path) => {
+      const marks = R.marks.get(path);
+      if (marks ? editor.marks !== marks : editor.marks.size) editor.setMarks(marks || new Map());
+      const bps = S.bps[path] || [];
+      if (editor.bps.size !== bps.length || bps.some(n => !editor.bps.has(n))) editor.setBreakpoints(bps);
+      editor.setExecLine(execLineFor(path));
+    },
+    activate: (editor, path) => {
+      ed = editor;
+      if (path) switchFile(path, { stash: false });
+      else { S.current = null; ed.value = ""; renderRunbar(); persist(); }
+    },
+    close: closeFile, toast, history: window.MARS_STATIC ? showFileHistory : null,
+    persist: layout => { S.layout = layout; persist(); },
+    remote: () => confirmBox("Load remote images?", "This contacts the image hosts in this document and reveals your IP address. Requests omit credentials and referrers; hosts must allow CORS. Only this preview is enabled, until you close or change its file.", "Load images"),
+    menu: actions => {
+      const body = document.createElement("div"); body.className = "group-menu";
+      const dialog = modal({ title: "Editor group", body });
+      for (const [label, action] of actions) { const b = document.createElement("button"); b.className = "btn"; b.textContent = label; b.onclick = () => { dialog.close(); action(); }; body.append(b); }
+    },
+    key: event => document.dispatchEvent(new KeyboardEvent("keydown", { ...event, bubbles: true, cancelable: true })),
+    preview: {
+      link: async (path, url) => {
+        if (/^https?:\/\//i.test(url)) {
+          if (await confirmBox("Open external link?", url, "Open link")) window.open(url, "_blank", "noopener,noreferrer");
+          return;
+        }
+        const target = previewPath(path, url); if (!target) return;
+        if (await openFile(target)) { if (/\.(md|markdown)$/i.test(target) && groups.tab()?.mode !== "preview") groups.mode(); }
+      },
+      image: async (path, url, remote) => {
+        let bytes, type;
+        if (/^https:\/\//i.test(url)) {
+          if (!remote) return null;
+          bytes = await window.fetchPreviewImage(url);
+        } else if (/^data:image\/(png|jpeg|gif|webp);base64,[a-zA-Z0-9+/=]+$/.test(url) && url.length < 7000000) {
+          return url;
+        } else {
+          const target = previewPath(path, url); if (!target || !/\.(png|jpe?g|gif|webp)$/i.test(target)) return null;
+          const entry = treeNode(target); if (!entry || entry.dir || entry.size > 5000000) return null;
+          const result = await engine.call("fs_read", { path: target, binary: true });
+          if (!result.b64 || result.b64.length > 7000000) return null;
+          bytes = Uint8Array.from(atob(result.b64), c => c.charCodeAt(0));
+        }
+        const head = Array.from(bytes.slice(0, 12));
+        if (head.slice(0, 8).join() === "137,80,78,71,13,10,26,10") type = "png";
+        else if (head[0] === 255 && head[1] === 216 && head[2] === 255) type = "jpeg";
+        else if (String.fromCharCode(...head.slice(0, 6)).match(/^GIF8[79]a$/)) type = "gif";
+        else if (String.fromCharCode(...head.slice(0, 4)) === "RIFF" && String.fromCharCode(...head.slice(8, 12)) === "WEBP") type = "webp";
+        else return null;
+        let raw = ""; for (let i = 0; i < bytes.length; i += 16384) raw += String.fromCharCode(...bytes.subarray(i, i + 16384));
+        return `data:image/${type};base64,${btoa(raw)}`;
+      },
+    },
   });
+  function previewPath(path, url) {
+    // Resolve document-relative references without ever escaping the workspace or accepting schemes.
+    if (!url || /^[\\/]|^[a-z][a-z\d+.-]*:/i.test(url) || /[\u0000-\u001f]/.test(url)) return null;
+    let decoded; try { decoded = decodeURIComponent(url.split(/[?#]/)[0]); } catch (_) { return null; }
+    if (!decoded || /[:\\\u0000-\u001f]/.test(decoded) || decoded.startsWith("/")) return null;
+    const parts = path.split("/").slice(0, -1);
+    for (const part of decoded.split("/")) { if (part === "..") { if (!parts.length) return null; parts.pop(); } else if (part && part !== ".") parts.push(part); }
+    return parts.join("/") || null;
+  }
 
   let draftTimer = null;
+  const historyTimers = new Map();
+  function historyFailure(e) {
+    let el = $("#history-warning");
+    if (!el) {
+      el = document.createElement("div"); el.id = "history-warning"; el.className = "toast error";
+      el.setAttribute("role", "alert"); $("#toasts").appendChild(el);
+    }
+    el.textContent = "Local history could not be recorded. Your existing versions were preserved; export a backup. " + (e.message || e);
+  }
+  function scheduleHistoryDraft(path) {
+    clearTimeout(historyTimers.get(path));
+    historyTimers.set(path, setTimeout(async () => {
+      historyTimers.delete(path);
+      const f = R.files.get(path);
+      if (!f || f.text === f.saved) return;
+      try { await window.MarsIDBFS.checkpoint(path, f.text); }
+      catch (e) { historyFailure(e); }
+    }, 3000));
+  }
+  async function preserveHistoryDrafts(paths) {
+    if (!engine.local) return true;
+    try {
+      for (const path of paths) {
+        const file = R.files.get(path);
+        if (!file || file.text === file.saved) continue;
+        const text = file.text;
+        await window.MarsIDBFS.checkpoint(path, text);
+        if (R.files.get(path) !== file || file.text !== text) throw new Error(`${path} changed while preserving its draft; please try again.`);
+      }
+      return true;
+    } catch (e) { historyFailure(e); return false; }
+  }
+  let draftReadFailed = false, draftWarningShown = false;
+  let draftVersions = {};
+  function saveDrafts() {
+    if (draftReadFailed) return false; // Never replace an unreadable recovery source with an empty map.
+    const drafts = {};
+    for (const [p, f] of R.files) if (f.text !== f.saved) drafts[p] = f.text;
+    try {
+      const raw = JSON.stringify(drafts), bases = {};
+      for (const [p, f] of R.files) if (f.text !== f.saved && f.version !== undefined) bases[p] = f.version;
+      localStorage.setItem(LS + ".drafts", raw);
+      localStorage.setItem(LS + ".draft-versions", JSON.stringify({ crc32: window.MarsFiles.crc32(new TextEncoder().encode(raw)), bases }));
+      return true;
+    }
+    catch (e) { if (!draftWarningShown) { draftWarningShown = true; toast("Unsaved drafts could not be stored. Export a backup before leaving this page.", "error", 15000); } return false; }
+  }
   function saveDraftSoon() {
     clearTimeout(draftTimer);
-    draftTimer = setTimeout(() => {
-      const drafts = {};
-      for (const [p, f] of R.files) if (f.text !== f.saved) drafts[p] = f.text;
-      try { localStorage.setItem(LS + ".drafts", JSON.stringify(drafts)); } catch (e) { }
-    }, 600);
+    draftTimer = setTimeout(saveDrafts, 600);
   }
-  const loadDrafts = () => { try { return JSON.parse(localStorage.getItem(LS + ".drafts") || "{}"); } catch (e) { return {}; } };
+  const loadDrafts = () => {
+    try {
+      const raw = localStorage.getItem(LS + ".drafts") || "{}", drafts = JSON.parse(raw);
+      if (!drafts || Array.isArray(drafts) || typeof drafts !== "object" || Object.values(drafts).some(v => typeof v !== "string")) throw new Error("Invalid draft data");
+      const metadata = JSON.parse(localStorage.getItem(LS + ".draft-versions") || "null");
+      if (metadata && metadata.crc32 !== window.MarsFiles.crc32(new TextEncoder().encode(raw))) throw new Error("Draft checksum mismatch");
+      draftVersions = metadata?.bases || {};
+      return drafts;
+    } catch (e) {
+      draftReadFailed = true;
+      if (!draftWarningShown) { draftWarningShown = true; storageProblem("Unsaved drafts could not be read. Their original stored data has been preserved for recovery."); }
+      return {};
+    }
+  };
   const isDirty = p => { const f = R.files.get(p); return f && f.text !== f.saved; };
 
   function renderFileTabs() {
+    groups.sync(S.current);
     $("#filetabs").innerHTML = S.open.map(p => `<div class="ftab ${p === S.current ? "active" : ""}" data-p="${esc(p)}" title="${esc(p)}">
         <span>${esc(p.split("/").pop())}</span>${isDirty(p) ? '<span class="dot"></span>' : ""}<button class="x" data-close="${esc(p)}" aria-label="Close">${icon("x")}</button></div>`).join("");
-    $$("#filetabs .ftab").forEach(t => t.onclick = (e) => { if (!e.target.closest(".x")) switchFile(t.dataset.p); });
+    $$("#filetabs .ftab").forEach(t => {
+      t.onclick = (e) => { if (!e.target.closest(".x")) switchFile(t.dataset.p); };
+      t.onmousedown = e => { if (e.button === 1) e.preventDefault(); };
+      t.onauxclick = e => { if (e.button === 1) { e.preventDefault(); closeFile(t.dataset.p); } };
+      t.draggable = true;
+      t.ondragstart = e => {
+        groups.drag = { group: groups.active, tab: groups.active.tabs.find(x => x.path === t.dataset.p && x.mode === "source") || { path: t.dataset.p, mode: "source" } };
+        e.dataTransfer.setData("application/x-mars-view", "view"); e.dataTransfer.effectAllowed = "move";
+        for (const g of groups.groups) g.body.style.pointerEvents = "none";
+      };
+      t.ondragend = () => groups.endDrag();
+    });
     $$("#filetabs .x").forEach(x => x.onclick = (e) => { e.stopPropagation(); closeFile(x.dataset.close); });
     renderTree();
   }
@@ -583,19 +839,24 @@
     if (f) f.view = { top: ed.ta.scrollTop, sel: ed.ta.selectionStart };
   }
 
-  function switchFile(p) {
+  function switchFile(p, { stash = true } = {}) {
     if (p !== S.current) navMark();
     if (!R.files.has(p)) { openFile(p); return; }
-    stashView();
+    if (stash) { groups.captureView(); stashView(); }
     S.current = p;
     const f = R.files.get(p);
-    ed.value = f.text;
-    if (f.view) { ed.ta.scrollTop = f.view.top; ed.ta.setSelectionRange(f.view.sel, f.view.sel); ed.syncScroll(); }
+    if (ed.documentPath !== p || ed.value !== f.text) {
+      ed.value = f.text; ed.documentPath = p;
+      const view = groups.active.tabs.find(t => t.path === p && t.mode === "source")?.view || f.view;
+      if (view) { ed.ta.scrollTop = view.top || 0; ed.ta.scrollLeft = view.left || 0; ed.ta.setSelectionRange(view.sel || 0, view.end ?? view.sel ?? 0); ed.syncScroll(); }
+    }
     ed.setMarks(R.marks.get(p) || new Map());
     ed.setBreakpoints(S.bps[p] || []);
     ed.setExecLine(execLineFor(p));
     updateTrail();
     renderFileTabs(); renderRunbar(); persist();
+    renderRuntimeValues();
+    refreshScopeValues();
     if (S.view !== "edit") setView("edit");
   }
 
@@ -604,7 +865,9 @@
     try {
       const r = await engine.call("fs_read", { path: p });
       const drafts = loadDrafts();
-      R.files.set(p, { text: drafts[p] !== undefined ? drafts[p] : r.text, saved: r.text });
+      const base = drafts[p] !== undefined && drafts[p] !== r.text ? draftVersions[p] : undefined;
+      R.files.set(p, { text: drafts[p] !== undefined ? drafts[p] : r.text, saved: r.text, version: base ?? r.version });
+      if (base !== undefined && r.version !== undefined && base !== r.version) storageProblem(`${p} changed after its unsaved draft was created. Both the stored file and the draft have been kept; download a recovery copy before resolving the difference.`);
       if (!S.open.includes(p)) S.open.push(p);
       if (focus) switchFile(p); else renderFileTabs();
       return true;
@@ -615,24 +878,27 @@
     }
   }
 
-  async function closeFile(p) {
-    if (isDirty(p) && !(await confirmBox("Unsaved changes", `${p} has unsaved changes. Close it anyway?`, "Discard"))) return;
+  async function closeFile(p, { force = false } = {}) {
+    if (!force && isDirty(p) && !(await confirmBox("Unsaved changes", `${p} has unsaved changes. Close it anyway?`, "Discard"))) return false;
+    if (!(await preserveHistoryDrafts([p]))) return false;
     R.files.delete(p);
     S.open = S.open.filter(x => x !== p);
     if (S.current === p) {
       S.current = S.open[S.open.length - 1] || null;
       if (S.current) switchFile(S.current); else { ed.value = ""; renderFileTabs(); }
     } else renderFileTabs();
-    saveDraftSoon(); persist();
+    saveDrafts(); persist();
+    return true;
   }
 
   async function saveFile(p) {
     const f = R.files.get(p);
     if (!f) return false;
     try {
-      await engine.call("fs_write", { path: p, text: f.text });
-      f.saved = f.text;
-      renderFileTabs(); renderRunbar(); saveDraftSoon();
+      const text = f.text;
+      const result = await engine.call("fs_write", { path: p, text, expectedVersion: f.version });
+      f.saved = text; f.version = result.version;
+      renderFileTabs(); renderRunbar(); saveDrafts();
       return true;
     } catch (e) { toast(`Save failed: ${e.message}`, "error"); return false; }
   }
@@ -640,26 +906,38 @@
 
   const TEMPLATE = (name) => `# ${name}\n        .data\nmsg:    .asciiz "Hello, MIPS!\\n"\n\n        .text\n        .globl main\nmain:\n        li   $v0, 4          # print string\n        la   $a0, msg\n        syscall\n\n        li   $v0, 10         # exit\n        syscall\n`;
 
+  // A name is entered relative to the chosen folder. Typed subpaths remain
+  // supported, but absolute paths and parent traversal are never accepted.
+  function newItemPath(dir, input) {
+    if (input === null || input === undefined) return null;
+    const value = input.trim().replace(/\\/g, "/");
+    if (!value || value.startsWith("/") || /[\x00-\x1f]/.test(value) || value.split("/").some(part => part.trim() === "..")) {
+      toast("Enter a name or a path inside this folder.", "error", 5000); return null;
+    }
+    const relative = normPath(value);
+    if (!relative) { toast("Enter a name.", "error", 5000); return null; }
+    return joinPath(dir, relative);
+  }
   async function newFile(dir = "") {
-    let name = await prompt("New file", dir ? dir + "/" : "", "name.asm");
+    const input = await prompt("New file", "", "name.asm", `Inside: ${dir || "Workspace root"}`);
+    let name = newItemPath(dir, input);
     if (!name) return;
-    name = name.trim().replace(/^\/+/, "");
     if (!/\.\w+$/.test(name)) name += ".asm";
-    name = normPath(name);
     try {
       await refreshTree();
       if (treeNode(name)) { toast(`${name} already exists`, "warn"); if (!treeNode(name).dir) await openFile(name); return; }
-      await engine.call("fs_write", { path: name, text: TEMPLATE(name.split("/").pop()) });
+      await engine.call("fs_write", { path: name, text: /\.(md|markdown)$/i.test(name) ? `# ${name.split("/").pop().replace(/\.[^.]+$/, "")}\n\n` : TEMPLATE(name.split("/").pop()), ...(engine.local ? { expectedVersion: null } : {}) });
       revealPath(name, { open: false });
       await refreshTree();
       await openFile(name);
       setView("edit");
     } catch (e) { toast(e.message, "error"); }
   }
-  async function newDir() {
-    const name = await prompt("New folder", "", "folder");
-    if (!name) return;
-    try { const p = normPath(name); await engine.call("fs_mkdir", { path: p }); revealPath(p); refreshTree(); } catch (e) { toast(e.message, "error"); }
+  async function newDir(dir = "") {
+    const input = await prompt("New folder", "", "folder", `Inside: ${dir || "Workspace root"}`);
+    const p = newItemPath(dir, input);
+    if (!p) return;
+    try { await refreshTree(); if (treeNode(p)) { toast(`${p} already exists`, "warn"); return; } await engine.call("fs_mkdir", { path: p }); revealPath(p); await refreshTree(); } catch (e) { toast(e.message, "error"); }
   }
 
   // ------------------------------------------------------------------ paths: rename / move / delete
@@ -675,6 +953,8 @@
     for (const [k, f] of [...R.files]) if (under(k, from)) { R.files.delete(k); R.files.set(map(k), f); }
     S.open = S.open.map(map);
     if (S.current) S.current = map(S.current);
+    groups.remap(map);
+    if (engine.local) for (const [path, f] of R.files) if (under(path, to) && f.text !== f.saved) scheduleHistoryDraft(path);
     for (const k of Object.keys(S.bps)) if (under(k, from)) { const v = S.bps[k]; delete S.bps[k]; S.bps[map(k)] = v; }
     for (const [k, v] of [...R.marks]) if (under(k, from)) { R.marks.delete(k); R.marks.set(map(k), v); }
     for (const c of [...collapsed]) if (under(c, from)) { collapsed.delete(c); collapsed.add(map(c)); }
@@ -697,9 +977,14 @@
     if (src && !under(src, to)) { try { await engine.call("fs_mkdir", { path: src }); } catch (e) { } }
   }
   async function renamePath(p) {
-    let to = await prompt("Rename", p);
-    to = normPath(to);
-    if (!to || to === p) return;
+    const input = await prompt("Rename", baseName(p));
+    if (input === null || input === undefined) return;
+    const name = input.trim();
+    if (!name || name === "." || name === ".." || /[\\/\x00-\x1f]/.test(name)) {
+      toast("Enter a name without slashes; use Move to change folders.", "error", 5000); return;
+    }
+    const to = joinPath(parentOf(p), name);
+    if (to === p) return;
     try {
       await movePath(p, to);
       revealPath(to, { open: false });
@@ -707,8 +992,9 @@
     } catch (e) { toast(e.message, "error"); }
   }
   async function deletePath(p) {
-    if (!(await confirmBox("Delete", `Delete ${p}? This cannot be undone.`, "Delete"))) return;
+    if (!(await confirmBox("Delete", engine.local ? `Delete ${p}? Saved files and open drafts will be kept in local history.` : `Delete ${p}? This cannot be undone.`, "Delete"))) return;
     try {
+      if (!(await preserveHistoryDrafts([...R.files.keys()].filter(k => under(k, p))))) return;
       await engine.call("fs_delete", { path: p });
       forgetPaths(p);
       refreshTree(); renderFileTabs();
@@ -784,7 +1070,9 @@
     else if (k === "imp") pickFiles(p);
     else if (k === "move") moveDialog(p);
     else if (k === "menu") nodeMenu(p);
+    else if (k === "history") showFileHistory(p);
     else if (k === "new") newFile(p);
+    else if (k === "newdir") newDir(p);
     else if (k === "toggle") { collapsed.has(p) ? collapsed.delete(p) : collapsed.add(p); saveCollapsed(); renderTree(); }
     else if (k === "open") openFile(p).then(ok => { if (ok && isNarrow()) setM("edit"); });
   }
@@ -795,9 +1083,9 @@
     if (!n) return;
     lastMenu = Date.now();
     const items = n.dir
-      ? [["toggle", collapsed.has(p) ? "Expand" : "Collapse", "folder"], ["new", "New file here", "newfile"], ["imp", "Import here", "upload"],
+      ? [["toggle", collapsed.has(p) ? "Expand" : "Collapse", "folder"], ["new", "New file here", "newfile"], ["newdir", "New folder here", "newdir"], ["imp", "Import here", "upload"],
         ["move", "Move to…", "move"], ["ren", "Rename", "rename"], ["dl", "Download .zip", "download"], ["del", "Delete", "trash"]]
-      : [["open", "Open", "file"], ["move", "Move to…", "move"], ["ren", "Rename", "rename"], ["dl", "Download", "download"], ["del", "Delete", "trash"]];
+      : [["open", "Open", "file"], ...(engine.local ? [["history", "History", "file"]] : []), ["move", "Move to…", "move"], ["ren", "Rename", "rename"], ["dl", "Download", "download"], ["del", "Delete", "trash"]];
     const m = modal({ sheet: true, title: esc(p),
       body: `<div class="sheet-grid node-menu">${items.map(([k, l, ic]) => `<button data-k="${k}">${icon(ic)}${l}</button>`).join("")}</div>` });
     $$(".sheet-grid button", m.el).forEach(b => b.onclick = () => { m.close(); nodeAction(p, b.dataset.k); });
@@ -847,7 +1135,7 @@
       const pad = 4 + n.depth * 14;
       html += `<div class="node${n.path === S.current ? " active" : ""}${n.dir ? " dir" + (open ? " open" : "") : ""}${n.path === dragSrc ? " dragging" : ""}" data-p="${esc(n.path)}" data-dir="${n.dir ? 1 : 0}" draggable="${drag}" role="treeitem"${n.dir ? ` aria-expanded="${open}"` : ""} style="padding-left:${pad}px">
         <span class="tw">${n.dir ? icon("chev") : ""}</span>${icon(n.dir ? "folder" : "file")}<span class="nm">${esc(n.name)}</span>${!n.dir && isDirty(n.path) ? ' <span style="color:var(--accent)">•</span>' : ""}
-        <span class="acts">${n.dir ? `<button data-a="new" title="New file here">${icon("newfile")}</button><button data-a="imp" title="Import into this folder (files or .zip)">${icon("upload")}</button>` : ""}<button data-a="dl" title="${n.dir ? "Download folder as .zip" : "Download"}">${icon("download")}</button><button data-a="move" title="Move to… (or drag it onto a folder)">${icon("move")}</button><button data-a="ren" title="Rename">${icon("rename")}</button><button data-a="del" title="Delete">${icon("trash")}</button></span><button class="more" data-a="menu" title="Actions" aria-label="Actions">${icon("more")}</button></div>`;
+        <span class="acts">${n.dir ? `<button data-a="new" title="New file here" aria-label="New file here">${icon("newfile")}</button><button data-a="newdir" title="New folder here" aria-label="New folder here">${icon("newdir")}</button>` : ""}<button data-a="dl" title="${n.dir ? "Download folder as .zip" : "Download"}">${icon("download")}</button><button data-a="ren" title="Rename">${icon("rename")}</button><button data-a="del" title="Delete">${icon("trash")}</button></span><button class="more" data-a="menu" title="Actions" aria-label="Actions">${icon("more")}</button></div>`;
     }
     el.innerHTML = html;
     if (dropMark !== null) markDrop(dropMark, true);
@@ -931,6 +1219,65 @@
     const m = p.match(/^(.*?)(\.[^./]*)?$/);
     for (let i = 2; ; i++) { const q = `${m[1]} (${i})${m[2] || ""}`; if (!taken.has(q)) return q; }
   }
+  async function restoreFullBackup(entries, archiveName) {
+    if (!engine.local) throw new Error("Full backup restore is available in the browser workspace.");
+    if (R.running || R.busyStep) throw new Error("Pause the simulator before restoring a backup.");
+    const manifests = entries.filter(e => e.path === ".mars-backup/manifest.json");
+    if (manifests.length !== 1) throw new Error("Invalid full backup manifest");
+    const metadata = JSON.parse(FX.dec.decode(manifests[0].bytes));
+    if (metadata.format !== "mars-ide-full-backup-v1" || !Array.isArray(metadata.history) || !Array.isArray(metadata.openDrafts))
+      throw new Error("Unsupported full backup format");
+    const saved = entries.filter(e => e.path !== ".mars-backup/manifest.json").map(e => ({path:e.path, data:e.bytes}));
+    const taken = new Set(saved.map(f => f.path));
+    const draftMap = new Map();
+    const addDraft = (path, text) => {
+      if (!draftMap.has(path)) draftMap.set(path, new Set());
+      draftMap.get(path).add(text);
+    };
+    if (metadata.drafts) {
+      const drafts = JSON.parse(metadata.drafts);
+      if (!drafts || Array.isArray(drafts) || typeof drafts !== "object") throw new Error("Invalid backup draft data");
+      for (const [path, text] of Object.entries(drafts)) {
+        if (typeof text !== "string") throw new Error("Invalid backup draft");
+        addDraft(path, text);
+      }
+    }
+    for (const d of metadata.openDrafts) {
+      if (!d || typeof d.path !== "string" || typeof d.text !== "string") throw new Error("Invalid open draft in backup");
+      addDraft(d.path, d.text);
+    }
+    const draftFiles = [];
+    for (const [path, texts] of draftMap) for (const text of texts) {
+      const m = path.match(/^(.*?)(\.[^./]*)?$/);
+      const name = uniquePath(`${m[1]} (draft)${m[2] || ""}`, taken); taken.add(name);
+      draftFiles.push({path:name, data:new TextEncoder().encode(text)});
+    }
+    if (!(await confirmBox("Restore full backup as copies?",
+      `Restore ${saved.length} saved files, ${draftFiles.length} drafts and ${metadata.history.length} history versions into a new folder. Existing files and the current layout will not be replaced.`, "Restore copies"))) return;
+    if (R.running || R.busyStep) throw new Error("Pause the simulator before restoring a backup.");
+    await engine.pullFromWorker();
+    const existing = await window.MarsIDBFS.files();
+    const base = `Restored backup ${new Date().toISOString().slice(0, 10)}`;
+    let prefix = base, n = 2;
+    while (existing.some(f => f.path === prefix || f.path.startsWith(prefix + "/")) || await window.MarsIDBFS.hasHistoryPrefix(prefix)) prefix = `${base} (${n++})`;
+    const restoredMeta = { format:metadata.format, created:metadata.created, restored:new Date().toISOString(),
+      settings:metadata.settings, note:'History and drafts were restored separately as copies. The original archive retains the complete manifest.' };
+    const files = [...saved, ...draftFiles, {path:'.mars-backup/manifest.json', data:new TextEncoder().encode(JSON.stringify(restoredMeta))}];
+    const result = await window.MarsIDBFS.restoreBackupCopy(prefix, files, metadata.history);
+    try {
+      // Mirror only the new files; never replace unrelated simulator-side files.
+      for (const f of files) {
+        const path = `${prefix}/${f.path}`;
+        await engine.workerCall("fs_write", { path, b64:window.MarsIDBFS.toB64(f.data) });
+        engine.mirroredVersions.set(path, window.MarsIDBFS.fingerprint(f.data));
+      }
+    }
+    catch (e) { engine.mirrorFailure = e; engine.storageError(new Error("Backup copies were restored, but the simulator mirror failed. Reload before assembling. " + e.message)); throw e; }
+    await refreshTree(); revealPath(prefix);
+    const first = draftFiles[0] || saved.find(f => /\.(asm|s)$/i.test(f.path));
+    if (first) await openFile(`${prefix}/${first.path}`);
+    toast(`Restored ${result.files} files and ${result.versions} history versions as copies in ${prefix}.`, "ok", 6000);
+  }
   /** Import [{path, file|bytes}] into the workspace (optionally under dir); a .zip asks where to extract. */
   async function importEntries(input, dir = "") {
     if (!R.fs) { toast("No workspace to import into", "error"); return; }
@@ -944,8 +1291,9 @@
       let entries;
       try {
         const bytes = it.bytes || new Uint8Array(await it.file.arrayBuffer());
-        entries = (await FX.unzip(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)))
-          .map(e => ({ path: normPath(e.path), bytes: e.bytes })).filter(e => e.path && !JUNK.test(e.path));
+        const raw = await FX.unzip(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+        if (raw.some(e => e.path === ".mars-backup/manifest.json")) { await restoreFullBackup(raw, rel); continue; }
+        entries = raw.map(e => ({ path: normPath(e.path), bytes: e.bytes })).filter(e => e.path && !JUNK.test(e.path));
       } catch (e) { toast(`${rel}: ${e.message}`, "error", 5000); continue; }
       if (!entries.length) { toast(`${rel}: the zip is empty`, "warn"); continue; }
       const dest = await askZipDest(rel, entries, joinPath(dir, parentOf(rel)), !!dir);
@@ -979,15 +1327,10 @@
       existing.add(path);
       const bytes = it.bytes || new Uint8Array(await it.file.arrayBuffer());
       try {
-        if (FX.TEXT_EXT.test(path) || looksText(bytes)) {
-          const text = FX.dec.decode(bytes);
-          await engine.call("fs_write", { path, text });
-          const f = R.files.get(path);
-          if (f && f.text === f.saved) { f.text = f.saved = text; if (path === S.current) ed.value = text; }
-        } else {
-          let bin = ""; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-          await engine.call("fs_write", { path, b64: btoa(bin) });
-        }
+        let bin = ""; for (let i = 0; i < bytes.length; i += 16384) bin += String.fromCharCode(...bytes.subarray(i, i + 16384));
+        const result = await engine.call("fs_write", { path, b64: btoa(bin) });
+        const f = R.files.get(path);
+        if (f && f.text === f.saved) { f.text = f.saved = FX.dec.decode(bytes); f.version = result.version; if (path === S.current) ed.value = f.text; }
         n++;
         if (!first && /\.(asm|s)$/i.test(path)) first = path;
       } catch (e) { toast(`${path}: ${e.message}`, "error", 5000); }
@@ -1011,7 +1354,7 @@
   async function exportFile(p = S.current) {
     if (!p) return;
     const f = R.files.get(p);
-    if (f) { FX.download(p.split("/").pop(), f.text); return; }
+    if (f && isDirty(p)) { FX.download(p.split("/").pop(), f.text); return; }
     try {
       const r = await engine.call("fs_read", { path: p, binary: true });
       const raw = atob(r.b64), u8 = new Uint8Array(raw.length);
@@ -1019,22 +1362,112 @@
       FX.download(p.split("/").pop(), new Blob([u8]));
     } catch (e) { toast(e.message, "error"); }
   }
+  async function showFileHistory(path) {
+    if (!engine.local) return;
+    try {
+      const versions = await window.MarsIDBFS.history(path);
+      const body = document.createElement("div");
+      if (!versions.length) {
+        body.textContent = "No snapshots yet. History starts when this file changes or is saved.";
+        modal({ title: `History: ${esc(path)}`, body, buttons: [{ label: "Close", primary: true }] });
+        return;
+      }
+      const select = document.createElement("select"); select.className = "text";
+      versions.forEach((v, i) => {
+        const option = document.createElement("option"); option.value = String(i);
+        option.textContent = `${new Date(v.time).toLocaleString()} · ${v.kind}`; select.append(option);
+      });
+      const preview = document.createElement("pre"); preview.className = "history-preview";
+      const show = () => { preview.textContent = versions[+select.value].text; };
+      select.onchange = show; body.append(select, preview); show();
+      const dialog = modal({ title: `History: ${esc(path)}`, body, buttons: [{ label: "Close", value: null },
+        { label: "Restore as copy", primary: true, value: "copy" }], onClose: async result => {
+          if (result !== "copy") return;
+          try {
+            const version = versions[+select.value];
+            const files = await window.MarsIDBFS.files();
+            const match = path.match(/^(.*?)(\.[^./]*)?$/);
+            const copy = uniquePath(`${match[1]} (restored)${match[2] || ""}`, new Set(files.map(f => f.path)));
+            await engine.call("fs_write", { path: copy, b64: version.b64, expectedVersion: null });
+            await refreshTree(); await openFile(copy); toast(`Restored as ${copy}`, "ok");
+          } catch (e) { historyFailure(e); }
+        } });
+    } catch (e) { historyFailure(e); }
+  }
+  async function showAllHistory() {
+    if (!engine.local) return;
+    try {
+      const versions = await window.MarsIDBFS.allHistory();
+      const paths = [...new Set(versions.map(v => v.path))].sort();
+      const body = document.createElement("div"); body.className = "group-menu";
+      if (!paths.length) body.textContent = "No snapshots yet. History is recorded automatically as files change.";
+      const dialog = modal({ title: "File history", body, buttons: [{ label: "Close", primary: true }] });
+      for (const path of paths) {
+        const button = document.createElement("button"); button.className = "btn"; button.textContent = path;
+        button.onclick = () => { dialog.close(); showFileHistory(path); }; body.append(button);
+      }
+    } catch (e) { historyFailure(e); }
+  }
+  async function exportFullBackup() {
+    if (!engine.local) return;
+    try {
+      const files = await window.MarsIDBFS.files();
+      if (files.some(f => f.path === '.mars-backup' || f.path.startsWith('.mars-backup/')))
+        throw new Error('The workspace already contains .mars-backup; it was not overwritten. Rename it before exporting a full backup.');
+      const history = await window.MarsIDBFS.allHistory();
+      const metadata = { format: 'mars-ide-full-backup-v1', created: new Date().toISOString(),
+        history, drafts: localStorage.getItem(LS + '.drafts'), draftVersions: localStorage.getItem(LS + '.draft-versions'),
+        settings: localStorage.getItem(LS), openDrafts: [...R.files].filter(([p]) => isDirty(p)).map(([path, f]) => ({path, text:f.text})) };
+      const entries = files.map(f => ({path:f.path, text:f.data}));
+      entries.push({path:'.mars-backup/manifest.json', text:JSON.stringify(metadata)});
+      FX.download(`mars-full-backup-${new Date().toISOString().slice(0, 10)}.zip`, FX.zip(entries));
+      toast('Full backup exported. It includes old and deleted versions; keep it private.', 'ok', 5000);
+    } catch (e) { toast(`Full backup failed: ${e.message}`, 'error', 15000); }
+  }
   async function exportWorkspace(dir = "") {
-    await refreshTree();
-    const files = R.tree.filter(n => !n.dir && (!dir || n.path.startsWith(dir + "/")));
-    if (!files.length) { toast("Nothing to export", "warn"); return; }
-    const out = [];
-    for (const n of files) {
-      const open = R.files.get(n.path);
-      if (open) { out.push({ path: n.path, text: open.text }); continue; }
-      const r = await engine.call("fs_read", { path: n.path, binary: true });
-      const raw = atob(r.b64), u8 = new Uint8Array(raw.length);
-      for (let i = 0; i < raw.length; i++) u8[i] = raw.charCodeAt(i);
-      out.push({ path: n.path, text: u8 });
-    }
-    const stamp = new Date().toISOString().slice(0, 10);
-    FX.download(`${dir ? dir.split("/").pop() : "mars-workspace"}-${stamp}.zip`, FX.zip(out));
-    toast(`Exported ${out.length} file${out.length === 1 ? "" : "s"}`, "ok", 2000);
+    try {
+      await refreshTree();
+      const entries = engine.local ? await window.MarsIDBFS.files() : R.tree;
+      const files = entries.filter(n => !n.dir && (!dir || n.path.startsWith(dir + "/")));
+      for (const [path] of R.files) if (isDirty(path) && (!dir || path.startsWith(dir + "/")) && !files.some(n => n.path === path)) files.push({ path });
+      if (!files.length) { toast("Nothing to export", "warn"); return; }
+      const out = [];
+      for (const n of files) {
+        const open = R.files.get(n.path);
+        if (open && isDirty(n.path)) { out.push({ path: n.path, text: open.text }); continue; }
+        if (n.data instanceof Uint8Array) { out.push({ path: n.path, text: n.data }); continue; }
+        const r = await engine.call("fs_read", { path: n.path, binary: true });
+        const raw = atob(r.b64), u8 = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) u8[i] = raw.charCodeAt(i);
+        out.push({ path: n.path, text: u8 });
+      }
+      const stamp = new Date().toISOString().slice(0, 10);
+      FX.download(`${dir ? dir.split("/").pop() : "mars-workspace"}-${stamp}.zip`, FX.zip(out));
+      toast(`Exported ${out.length} file${out.length === 1 ? "" : "s"}`, "ok", 2000);
+    } catch (e) { toast("Backup export failed: " + e.message, "error", 15000); }
+  }
+  function storageProblem(message) {
+    modal({ title: "Workspace needs attention", body: `<p>${esc(message)}</p><p>Do not clear site data or reset the workspace. Download a recovery copy first. No automatic repair or replacement will be attempted.</p>`,
+      buttons: [{ label: "Close", value: null }, { label: "Download recovery copy", primary: true, value: "recover" }],
+      onClose: async value => {
+        if (value !== "recover") return;
+        try {
+          const recovery = window.MarsIDBFS ? await window.MarsIDBFS.recovery() : { format: "mars-ide-recovery-v1" };
+          recovery.drafts = localStorage.getItem(LS + ".drafts"); recovery.settings = localStorage.getItem(LS);
+          recovery.draftVersions = localStorage.getItem(LS + ".draft-versions");
+          recovery.openDocuments = [...R.files].map(([path, f]) => ({ path, text: f.text, dirty: f.text !== f.saved }));
+          if (engine.local && engine.connected) {
+            let timer;
+            try {
+              recovery.workerRecords = await Promise.race([
+                engine.workerCall("fs_list").then(list => Promise.all(list.entries.filter(it => !it.dir).map(it => engine.workerCall("fs_read", { path: it.path, binary: true })))),
+                new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Simulator snapshot timed out")), 3000); }),
+              ]);
+            } catch (e) { recovery.workerProblem = e.message; } finally { clearTimeout(timer); }
+          }
+          FX.download(`mars-recovery-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(recovery, null, 2));
+        } catch (e) { toast("Recovery export failed: " + e.message, "error", 15000); }
+      } });
   }
   // drag & drop: tree items move inside the workspace (marked with MARS_DND), OS files import anywhere
   const MARS_DND = "application/x-mars-path";
@@ -1141,20 +1574,21 @@
     }).join("")}</div>`;
   }
   function renderCard(f) {
+    const example = name => window.MIPS_EXAMPLES?.[name] ? `<div class="card-example"><b>Example</b><pre><code>${window.MIPS_EXAMPLES[name].split("\n").map(line => M.highlight(line)).join("\n")}</code></pre><small>Illustrative snippet; labels and register contents are local to this example.</small></div>` : "";
     const exact = f.startsWith("=") ? f.slice(1) : null;
     const match = (...xs) => !f || (exact ? xs[0] === exact : xs.some(x => String(x).toLowerCase().includes(f)));
     let h = `<div class="card-top"><b>${esc(CARD.title || "Reference card")}</b><span class="grow"></span>
       <a class="chip" href="ref/MIPS_Reference.pdf" target="_blank" rel="noopener">Open original PDF ↗</a></div>`;
     const ins = CARD.instructions.filter(i => match(i.m, i.name, i.op, i.fmt + "-type", i.code));
     if (ins.length) {
-      h += `<div class="card-sec">Instructions <span>tap a row for its encoding</span></div><table class="grid cardtab"><tbody>` +
+      h += `<div class="card-sec">Instructions <span>tap a row for its encoding and example</span></div><table class="grid cardtab"><tbody>` +
         ins.map(i => `<tr data-m="${i.m}"><td class="t-instr">${i.m}</td><td class="dim ops">${esc(i.ops)}</td><td class="nm">${esc(i.name)}</td>
           <td class="opx">${esc(i.op)}</td><td><span class="fmt fmt-${i.fmt}">${i.fmt}</span></td><td class="dim num">${esc(i.code)}</td></tr>
-          <tr class="encrow hidden" data-for="${i.m}"><td colspan="6">${encoding(i)}</td></tr>`).join("") + `</tbody></table>`;
+          <tr class="encrow hidden" data-for="${i.m}"><td colspan="6">${encoding(i)}${example(i.m)}</td></tr>`).join("") + `</tbody></table>`;
     }
     const ps = CARD.pseudo.filter(i => match(i.m, i.name, "pseudo"));
     if (ps.length) h += `<div class="card-sec">Pseudo-instructions <span>expanded by the assembler</span></div><table class="grid cardtab"><tbody>` +
-      ps.map(i => `<tr data-m="${i.m}"><td class="t-pseudo">${i.m}</td><td class="dim ops">${esc(i.ops)}</td><td class="nm" colspan="4">${esc(i.name)}</td></tr>`).join("") + `</tbody></table>`;
+      ps.map(i => `<tr data-m="${i.m}"><td class="t-pseudo">${i.m}</td><td class="dim ops">${esc(i.ops)}</td><td class="nm" colspan="4">${esc(i.name)}</td></tr><tr class="encrow hidden" data-for="${i.m}"><td colspan="6">${example(i.m)}</td></tr>`).join("") + `</tbody></table>`;
     if (!f || match("formats", "r-type", "i-type", "j-type", "encoding")) {
       h += `<div class="card-sec">Instruction formats</div>` + Object.entries(CARD.formats).map(([k, fs]) =>
         `<div class="fmtrow"><span class="fmt fmt-${k}">${k}</span><div class="enc">${fs.map(x => `<div class="encf" style="flex:${x.bits}"><span class="eb">${x.bits} bits</span><span class="ev">${x.f}</span></div>`).join("")}</div></div>`).join("");
@@ -1203,6 +1637,7 @@
     S.bps[path] = [...set].sort((a, b) => a - b);
     if (!S.bps[path].length) delete S.bps[path];
     if (path === S.current) ed.setBreakpoints(S.bps[path] || []);
+    groups.refresh();
     markExecBps();
     persist();
   }
@@ -1226,7 +1661,8 @@
 
   async function assemble() {
     if (!S.current) { toast("Open or create a file first", "warn"); return false; }
-    for (const p of S.open) if (isDirty(p) && (S.autosave || p === S.current)) await saveFile(p);
+    if (/\.(md|markdown)$/i.test(S.current)) { toast("Select an assembly source tab before assembling", "warn"); return false; }
+    for (const p of S.open) if (isDirty(p) && (S.autosave || p === S.current) && !(await saveFile(p))) return false;
     let files = [S.current];
     if (S.assemble_all) {
       const dir = S.current.includes("/") ? S.current.slice(0, S.current.lastIndexOf("/")) : "";
@@ -1245,6 +1681,7 @@
       R.marks.get(m.file).set(m.line, { kind: m.warning ? "warning" : "error", col: m.col, msg: m.message.trim() });
     }
     ed.setMarks(R.marks.get(S.current) || new Map());
+    groups.refresh();
     renderMessages();
     R.running = false; R.error = false; R.waiting = null;
     if (!res.success) {
@@ -1265,10 +1702,10 @@
     R.assembled = true; R.finished = false;
     R.prev = null;
     applyState(res.state);
+    groups.refresh();
     const w = R.messages.length;
     consoleLine(`Assemble: ${files.join(", ")} — operation completed successfully.${w ? ` (${w} warning${w > 1 ? "s" : ""})` : ""}`, "ok");
     if (w) { R.ioTab = "msg"; renderSubTabs(); showIoTab(); }
-    setView("exec");
     return true;
   }
 
@@ -1295,7 +1732,7 @@
     async run() {
       if (R.running) return ACT.pause();
       if (!(await ensureAssembled())) return;
-      if (R.finished) { toast("Program finished — Reset (F12) to run again", "warn"); return; }
+      if (R.finished) { toast("Program finished — Reset (Shift+F12) to run again", "warn"); return; }
       R.prev = R.state;
       showPanels(true);
       try { await engine.call("run", { breakpoints: bpAddrs(), speed: S.speed }); }
@@ -1308,7 +1745,7 @@
     async step() {
       if (R.running || R.busyStep) return;
       if (!(await ensureAssembled())) return;
-      if (R.finished) { toast("Program finished — Reset (F12) to run again", "warn"); return; }
+      if (R.finished) { toast("Program finished — Reset (Shift+F12) to run again", "warn"); return; }
       R.busyStep = true;
       showPanels(true);
       const prev = R.state;
@@ -1321,17 +1758,18 @@
       finally { R.busyStep = false; }
     },
     async back() {
-      if (R.running || !R.assembled) return;
+      if (R.running || R.busyStep) { toast("Pause before stepping back", "warn", 1600); return; }
+      if (!(await ensureAssembled())) return;
       const prev = R.state;
       try {
         const res = await engine.call("backstep");
-        if (res.empty) { toast("Nothing to undo", "warn", 1500); return; }
+        if (res.empty) { toast("Nothing to undo yet — step forward first", "warn", 1800); return; }
         R.prev = prev; R.finished = false; R.error = false;
         applyState(res.state, true);
       } catch (e) { toast(e.message, "error"); }
     },
     async reset() {
-      if (!R.assembled) return;
+      if (!R.assembled) { toast("Assemble a program first", "warn", 1600); return; }
       try {
         const res = await engine.call("reset");
         R.running = false; R.finished = false; R.error = false; R.prev = null; R.memPrev = new Map(); R.waiting = null;
@@ -1368,8 +1806,11 @@
   // ------------------------------------------------------------------ console
   const out = $("#out");
   let outLen = 0;
+  let consoleTail = true;
+  const consoleAtBottom = () => out.scrollHeight - out.scrollTop - out.clientHeight < 24;
+  function tailConsole() { if (consoleTail) out.scrollTop = out.scrollHeight; }
+  out.addEventListener("scroll", () => { consoleTail = consoleAtBottom(); }, { passive: true });
   function consoleWrite(text, cls = "") {
-    const atBottom = out.scrollTop + out.clientHeight >= out.scrollHeight - 30;
     if (cls) { const s = document.createElement("span"); s.className = cls; s.textContent = text; out.appendChild(s); }
     else {
       const last = out.lastChild;
@@ -1377,7 +1818,7 @@
     }
     outLen += text.length;
     if (outLen > 400000) { while (out.firstChild && outLen > 300000) { outLen -= out.firstChild.textContent.length; out.firstChild.remove(); } }
-    if (atBottom) out.scrollTop = out.scrollHeight;
+    tailConsole();
   }
   function consoleLine(text, cls) {
     const t = out.textContent;
@@ -1393,7 +1834,9 @@
     $("#stdin").placeholder = kind ? `Program is waiting for ${kind} input — type and press Enter` : "Program input — press Enter";
     if (kind) {
       if (S.zen) setZen(false);
+      if (S.hideConsole) { S.hideConsole = false; persist(); }
       showPanels(true);
+      updateFocus();
       if (isNarrow()) setM("io");
       else if (R.ioTab !== "run") { R.ioTab = "run"; renderSubTabs(); showIoTab(); }
       setTimeout(() => $("#stdin").focus(), 0);
@@ -1453,6 +1896,8 @@
     if (!R.running) R.finished = R.finished || !!st.finished;
     renderRegs();
     updatePc(follow);
+    refreshScopeValues();
+    if (inspectorEl?._update) inspectorEl._update();
     if (S.view === "mem") refreshMemory();
     if (S.view === "tools" && R.toolTab === "bitmap") refreshBitmap();
     renderRunbar();
@@ -1505,20 +1950,22 @@
     return s;
   }
   /** Show every interpretation of a 32-bit value, with edit + "show in memory". */
-  const meaningCtx = () => ({ state: R.state, segments: R.segments, labels: R.labels, addrIdx: R.addrIdx, rows: R.rows, engine });
-  function inspect(anchor, { title, sub, value, onSave, pointer = true, extra = "", meaning = null }) {
+  const meaningCtx = () => ({ state: R.state, segments: R.segments, labels: R.labels, addrIdx: R.addrIdx, rows: R.rows, engine, running: R.running });
+  function inspect(anchor, { title, sub, value, onSave, pointer = true, extra = "", meaning = null, compact = false, point = null }) {
     closeInspector();
     const v = value | 0;
     const labs = labelAt(v);
-    const rows = [["hex", M.hex(v)], ["signed", String(M.s32(v))], ["unsigned", String(M.u32(v))],
-      ["binary", binary(v)], ["float", M.fmtFloat(M.asFloat(v))], ["chars", chars(v)]];
+    const rows = compact
+      ? [["hex", M.hex(v)], ["signed", String(M.s32(v))], ["unsigned", String(M.u32(v))]]
+      : [["hex", M.hex(v)], ["signed", String(M.s32(v))], ["unsigned", String(M.u32(v))],
+         ["binary", binary(v)], ["float", M.fmtFloat(M.asFloat(v))], ["chars", chars(v)]];
     const el = document.createElement("div");
-    el.className = "inspector" + (isNarrow() ? " sheet" : "");
+    el.className = "inspector" + (compact ? " compact" : "") + (isNarrow() ? " sheet" : "");
     el.innerHTML = `<div class="ins-h"><span class="ins-t">${title}</span><span class="ins-s">${sub || ""}</span>
         <button class="icon-btn ins-x" aria-label="Close">${icon("x")}</button></div>
       ${meaning ? `<div class="ins-meaning"><div class="dim">…</div></div>` : ""}
       <div class="ins-grid">${rows.map(([k, x]) => `<span class="k">${k}</span><span class="v" title="Click to copy">${esc(x)}</span>`).join("")}
-        ${labs.length ? `<span class="k">label</span><span class="v t-label">${esc(labs.join(", "))}</span>` : ""}${extra}</div>
+        ${labs.length ? `<span class="k">label</span><span class="v t-label">${esc(labs.join(", "))}</span>` : ""}${compact ? "" : extra}</div>
       ${onSave ? `<div class="ins-edit"><input value="${esc(M.hex(v))}" autocapitalize="off" autocomplete="off" spellcheck="false" aria-label="New value">
         <button class="btn primary ins-save">Set</button></div>` : ""}
       <div class="ins-acts">${pointer ? `<button class="chip ins-mem">Show memory at ${esc(M.hex(v))}</button>` : ""}</div>`;
@@ -1527,11 +1974,12 @@
     inspectorCloser = (fromBack) => closeInspector(fromBack === true ? true : false);
     overlayOpened(inspectorCloser);
     if (!isNarrow()) {
-      const r = anchor.getBoundingClientRect();
+      const r = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : { left: 8, top: 8, width: 0, bottom: 8 };
+      const ax = point ? point.x : r.left + r.width / 2, ay = point ? point.y : r.bottom + 6;
       const w = el.offsetWidth, h = el.offsetHeight;
-      let x = Math.min(window.innerWidth - w - 8, Math.max(8, r.left - w / 2 + r.width / 2));
-      let y = r.bottom + 6;
-      if (y + h > window.innerHeight - 8) y = Math.max(8, r.top - h - 6);
+      let x = Math.min(window.innerWidth - w - 8, Math.max(8, ax - w / 2));
+      let y = ay + 6;
+      if (y + h > window.innerHeight - 8) y = Math.max(8, ay - h - 6);
       el.style.left = x + "px"; el.style.top = y + "px";
     }
     $(".ins-x", el).onclick = () => closeInspector();
@@ -1564,7 +2012,7 @@
     }
   }
   document.addEventListener("mousedown", (e) => {
-    if (inspectorEl && !inspectorEl.contains(e.target) && !e.target.closest("td.editable,.regrow")) closeInspector();
+    if (inspectorEl && !inspectorEl.contains(e.target) && !e.target.closest("td.editable,.regrow,.basic,.runtime-values,.ed,textarea")) closeInspector();
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && inspectorEl) { e.stopPropagation(); closeInspector(); } }, true);
 
@@ -1682,12 +2130,249 @@
   }
 
   // execute view ---------------------------------------------------------
+  // Show actual current machine state, never a prediction of what this instruction will do.
+  function instructionRegisters(text) {
+    const seen = new Set(), result = [];
+    for (const token of M.lex(text || "")) {
+      if (token.k !== "register" && token.k !== "fpreg") continue;
+      const name = text.slice(token.s, token.e).toLowerCase(), part = name.slice(1);
+      const fp = token.k === "fpreg", number = fp ? +part.slice(1) : /^\d+$/.test(part) ? +part : M.REG_NAMES.indexOf(name);
+      if (number < 0 || number > 31 || seen.has((fp ? "f" : "r") + number)) continue;
+      seen.add((fp ? "f" : "r") + number);
+      result.push({ name: !fp && /^\d+$/.test(part) ? `${M.REG_NAMES[number]} (${name})` : name, number, fp });
+    }
+    const op = (text || "").trim().split(/\s+/)[0].toLowerCase();
+    if (op === "syscall") for (const number of [2, 4, 5, 6, 7]) {
+      if (!seen.has("r" + number)) result.push({ name: M.REG_NAMES[number], number, fp: false, implicit: true });
+    }
+    return result;
+  }
+  function registerValue(reg, state = R.state) {
+    const values = reg.fp ? state?.fpr : state?.gpr;
+    return values && values[reg.number] != null ? M.hex(values[reg.number]) : "unavailable";
+  }
+  function inspectEditorLine(editor) {
+    if (!R.assembled || !R.state) { toast("Assemble a program to inspect runtime values", "warn"); return; }
+    const line = editor.ta.value.slice(0, editor.ta.selectionStart).split("\n").length;
+    const matches = R.rows.filter(r => r.file === S.current && r.line === line);
+    const row = matches.find(r => r.addr === R.state.pc) || matches[0];
+    if (!row) { toast("No assembled instruction on this line. Move the cursor to an instruction first.", "warn"); return; }
+    if (isNarrow()) { editor.ta.blur(); try { navigator.virtualKeyboard?.hide(); } catch (_) { } }
+    inspectInstruction(editor.host, row);
+  }
+  function renderRuntimeValues() {
+    const bar = $("#runtime-values");
+    const row = R.state && R.assembled ? R.rows[R.addrIdx.get(R.state.pc)] : null;
+    const registers = row ? instructionRegisters(row.basic) : [];
+    if (!row || /\.(md|markdown)$/i.test(S.current || "")) { bar.hidden = true; return; }
+    bar.hidden = false;
+    bar.innerHTML = `<span class="runtime-label" title="Current register values at the next instruction">${R.running ? "Live" : R.finished ? "Final" : "Next"} ${esc(M.hex(R.state.pc))}</span>` +
+      (registers.length ? registers.map(reg => `<button class="runtime-reg" data-fp="${reg.fp ? 1 : 0}" data-n="${reg.number}" title="Inspect ${esc(reg.name)}">${esc(reg.name)} <b>${esc(registerValue(reg))}</b></button>`).join("") : '<span class="runtime-label">No register operands</span>') +
+      `<button class="runtime-detail" title="Inspect instruction values" aria-label="Inspect current instruction values">Values</button>`;
+    $(".runtime-detail", bar).onclick = e => inspectInstruction(e.currentTarget, row);
+    $$(".runtime-reg", bar).forEach(b => b.onclick = () => inspectRuntimeRegister(b, +b.dataset.n, b.dataset.fp === "1"));
+  }
+  function inspectRuntimeRegister(anchor, n, fp) {
+    const state = R.state; if (!state || !(fp ? state.fpr : state.gpr)) return;
+    const name = fp ? `$f${n}` : M.REG_NAMES[n];
+    inspect(anchor, { title: esc(name), sub: fp ? "floating-point bits" : esc(MipsMeaning.ROLE[n] || ""),
+      value: fp ? state.fpr[n] : state.gpr[n], pointer: !fp,
+      meaning: fp ? MipsMeaning.fprMeaning(n, meaningCtx()) : MipsMeaning.gprMeaning(n, meaningCtx()) });
+  }
+  /** Compact, token-first runtime value lookup (Ctrl/Cmd+click in the editor). */
+  function inspectEditorToken(editor, line, col, text, point) {
+    if (!R.assembled || !R.state) { toast("Assemble a program to inspect runtime values", "warn"); return; }
+    const token = M.lex(text).find(t => t.k !== "ws" && col >= t.s + 1 && col <= t.e + 1);
+    if (!token) return;
+    const raw = text.slice(token.s, token.e);
+    const MM = window.MipsMeaning, ctx = meaningCtx();
+    if (token.k === "register") {
+      const fm = /^\$f(\d{1,2})$/i.exec(raw);
+      let fp = !!fm, n = fm ? +fm[1] : M.REG_NAMES.indexOf(raw.toLowerCase());
+      if (!fp && n < 0) { const nm = /^\$(\d{1,2})$/.exec(raw); if (nm) n = +nm[1]; }
+      if (n < 0 || n > 31) return;
+      const state = R.state, value = fp ? state.fpr[n] : state.gpr[n];
+      if (value == null) return;
+      const name = fp ? `$f${n}` : M.REG_NAMES[n];
+      const stateLabel = R.running ? "running · sampled" : R.finished ? "final" : "paused · next instruction";
+      inspect(editor.host, { title: esc(name), sub: `${fp ? "floating-point bits" : esc(MM.ROLE[n] || "")} · ${stateLabel}`,
+        value, compact: true, point, pointer: !fp,
+        meaning: fp ? MM.fprMeaning(n, ctx) : MM.gprMeaning(n, ctx) });
+      return;
+    }
+    if (token.k === "label" || token.k === "symbol") {
+      const label = (R.labels || []).find(l => l.name === raw);
+      if (!label) return;
+      const addr = label.addr >>> 0;
+      const meaning = (async () => {
+        const out = [["address", M.hex(addr)]];
+        const region = MM.region(addr, ctx);
+        if (region) out.push(["region", esc(region)]);
+        if (region && (region.startsWith(".text") || region === "kernel text")) {
+          const i = ctx.addrIdx && ctx.addrIdx.get(addr);
+          out.push(["instruction", i === undefined ? "code label" : M.highlight(ctx.rows[i].basic)]);
+          return out;
+        }
+        if (R.running) { out.push(["contents", "pause to read memory"]); return out; }
+        if (addr >= 0xffff0000) { out.push(["contents", "MMIO not read automatically"]); return out; }
+        try {
+          const result = await engine.call("memory", { addr: addr & ~3, words: 1 }, 4000);
+          if (Array.isArray(result.words) && result.words[0] != null) out.push(["word", M.hex(result.words[0])]);
+          const str = await MM.cString(addr, ctx);
+          if (str) out.push(["string", str]);
+        } catch (_) { out.push(["contents", "memory unavailable"]); }
+        return out;
+      })();
+      inspect(editor.host, { title: esc(raw), sub: `label · ${R.running ? "running · address sampled" : R.finished ? "final" : "paused"}`,
+        value: addr, compact: true, point, meaning });
+      return;
+    }
+    if (token.k === "number") {
+      let value; try { value = M.parseNum(raw); } catch (_) { return; }
+      inspect(editor.host, { title: esc(raw), sub: "literal", value, compact: true, point, pointer: false });
+    }
+  }
+  /** Nearest text label in the current file and the registers used in its block. */
+  function currentScope(row) {
+    if (!row || !row.file || !R.state) return null;
+    const curIdx = R.addrIdx.get(R.state.pc);
+    if (curIdx === undefined) return null;
+    const labels = [];
+    const seen = new Set();
+    for (const l of R.labels || []) {
+      if (l.data) continue;
+      const idx = R.addrIdx.get(l.addr);
+      if (idx === undefined || R.rows[idx].file !== row.file) continue;
+      const key = l.name + "@" + l.addr;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      labels.push({ name: l.name, idx });
+    }
+    labels.sort((a, b) => a.idx - b.idx);
+    let start = null;
+    for (const l of labels) if (l.idx <= curIdx) start = l;
+    if (!start) return null;
+    const next = labels.find(l => l.idx > start.idx);
+    const end = next ? next.idx : R.rows.length;
+    const regs = new Map();
+    for (let i = start.idx; i < end; i++) {
+      const r = R.rows[i];
+      if (r.file !== row.file) continue;
+      for (const reg of instructionRegisters(r.basic)) {
+        if (reg.implicit || reg.number === 0 || reg.number === 1) continue;
+        const key = (reg.fp ? "f" : "r") + reg.number;
+        if (!regs.has(key)) regs.set(key, reg);
+      }
+    }
+    let line = R.rows[start.idx].line || 1;
+    const text = R.files.get(row.file)?.text;
+    if (text) {
+      const re = new RegExp("^\\s*" + start.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*:");
+      const lines = text.split("\n");
+      const at = lines.findIndex(s => re.test(s));
+      if (at >= 0) line = at + 1;
+    }
+    return { file: row.file, name: start.name, line, regs: [...regs.values()] };
+  }
+  function scopeInlineHtml(scope, mode) {
+    if (!scope.regs.length) return "";
+    const ctx = meaningCtx(), MM = window.MipsMeaning;
+    const parts = scope.regs.slice(0, 6).map(reg => {
+      const name = reg.fp ? `$f${reg.number}` : M.REG_NAMES[reg.number];
+      const v = (reg.fp ? R.state.fpr : R.state.gpr)?.[reg.number];
+      if (v == null) return `${esc(name)}=?`;
+      if (mode === 2) return `${esc(name)}=${esc(M.hex(v))}`;
+      if (reg.fp) return `${esc(name)}=${esc(M.fmtFloat(M.asFloat(v)))}`;
+      const u = v >>> 0;
+      if (MM && u > 0x1000) {
+        const region = MM.region(u, ctx);
+        const label = region && region !== "memory-mapped I/O" ? MM.labelFor(u, ctx) : null;
+        if (label) return `${esc(name)}=${label}`;
+        if (region === "memory-mapped I/O") return `${esc(name)}=MMIO`;
+        if (region) return `${esc(name)}=${esc(region)}`;
+      }
+      if (u >= 32 && u < 127) return `${esc(name)}='${esc(String.fromCharCode(u))}'`;
+      return `${esc(name)}=${M.s32(v)}`;
+    });
+    if (scope.regs.length > 6) parts.push(`+${scope.regs.length - 6}`);
+    return parts.join("  ");
+  }
+  function refreshScopeValues() {
+    const mode = +S.scopeValues || 0;
+    const row = mode && R.assembled && R.state ? R.rows[R.addrIdx.get(R.state.pc)] : null;
+    const scope = row ? currentScope(row) : null;
+    const html = scope ? scopeInlineHtml(scope, mode) : "";
+    for (const g of groups.groups) {
+      const tab = groups.tab(g);
+      const show = html && tab?.path === scope?.file && tab.mode === "source";
+      g.editor.setScopeValues(show ? scope.line : null, show ? html : null);
+    }
+  }
+  function memoryOperand(basic, state) {
+    // Basic uses the encoded signed 16-bit offset, occasionally printed as hex.
+    const m = String(basic).match(/^\s*(lb|lbu|lh|lhu|lw|ll|sb|sh|sw|sc|lwc1|swc1|ldc1|sdc1)\s+[^,]+,\s*([-+]?(?:0x[\da-f]+|\d+))\s*\(\s*\$(\d+|[a-z]+\d?)\s*\)/i);
+    if (!m) return null;
+    const base = /^\d+$/.test(m[3]) ? +m[3] : M.REG_NAMES.indexOf("$" + m[3].toLowerCase());
+    if (base < 0 || base > 31 || state.gpr?.[base] == null) return null;
+    const rawOffset = m[2][0] === "-" ? -Number(m[2].slice(1)) : Number(m[2].replace(/^\+/, ""));
+    const offset = (rawOffset << 16) >> 16;
+    return { addr: (state.gpr[base] + offset) >>> 0, op: m[1].toLowerCase() };
+  }
+  function inspectInstruction(anchor, row) {
+    if (!row || !R.state || !R.assembled) { toast("Assemble a program to inspect runtime values", "warn"); return; }
+    closeInspector();
+    const regs = instructionRegisters(row.basic);
+    const el = document.createElement("div"); el.className = "inspector instruction-inspector" + (isNarrow() ? " sheet" : "");
+    el.setAttribute("role", "dialog"); el.setAttribute("aria-label", "Instruction runtime values");
+    el.innerHTML = `<div class="ins-h"><span class="ins-t">Instruction values</span><button class="icon-btn ins-x" aria-label="Close">${icon("x")}</button></div>
+      <div class="instruction-code">${M.highlight(row.basic)}</div><div class="instruction-state"></div><div class="instruction-registers"></div><div class="instruction-memory" hidden></div>`;
+    document.body.append(el); inspectorEl = el;
+    inspectorCloser = fromBack => closeInspector(fromBack === true); overlayOpened(inspectorCloser);
+    let memoryRequest = 0;
+    const update = () => {
+      if (inspectorEl !== el) return;
+      const state = R.state;
+      $(".instruction-state", el).textContent = `${R.running ? "Running · latest sampled state" : R.finished ? "Final state" : "Paused state"} · PC ${M.hex(state.pc)}${state.pc === row.addr ? " · next instruction" : " · values are current, not historical"}${isDirty(row.file) ? " · source has unsaved changes; mapping may be stale" : ""}`;
+      $(".instruction-registers", el).innerHTML = regs.length ? regs.map(reg => {
+        const v = (reg.fp ? state.fpr : state.gpr)?.[reg.number];
+        const detail = v == null ? "unavailable" : reg.fp ? "float " + M.fmtFloat(M.asFloat(v)) : "signed " + M.s32(v);
+        return `<button class="instruction-reg" data-fp="${reg.fp ? 1 : 0}" data-n="${reg.number}"><span>${esc(reg.name)}</span><b>${esc(registerValue(reg, state))}</b><small>${esc(detail)}${reg.implicit ? " · syscall" : ""}</small></button>`;
+      }).join("") : '<div class="dim">No explicit register operands in this instruction.</div>';
+      if (/^(multu?|divu?|mfhi|mflo|mthi|mtlo)\b/i.test(row.basic)) {
+        $(".instruction-registers", el).insertAdjacentHTML("beforeend", `<div class="instruction-special">HI ${esc(M.hex(state.hi))} · LO ${esc(M.hex(state.lo))}</div>`);
+      }
+      $$(".instruction-reg", el).forEach(b => b.onclick = () => inspectRuntimeRegister(b, +b.dataset.n, b.dataset.fp === "1"));
+      const mem = memoryOperand(row.basic, state), box = $(".instruction-memory", el), serial = ++memoryRequest;
+      box.hidden = !mem;
+      if (!mem) return;
+      const address = M.hex(mem.addr), base = mem.addr & ~3;
+      if (R.running) { box.textContent = `Effective address ${address} · pause to read memory`; return; }
+      if (mem.addr >= 0xffff0000) { box.textContent = `Effective address ${address} · MMIO not read automatically`; return; }
+      box.textContent = `Effective address ${address} · reading…`;
+      engine.call("memory", { addr: base, words: 1 }, 4000).then(result => {
+        if (inspectorEl !== el || serial !== memoryRequest) return;
+        if (!Array.isArray(result.words) || result.words[0] == null) throw new Error("No memory value returned");
+        const word = result.words[0] >>> 0;
+        box.textContent = `Effective address ${address} · current word at ${M.hex(base)}: ${M.hex(word)}`;
+      }).catch(() => {
+        if (inspectorEl === el && serial === memoryRequest) box.textContent = `Effective address ${address} · memory unavailable`;
+      });
+    };
+    el._update = update; update();
+    $(".ins-x", el).onclick = () => closeInspector();
+    if (!isNarrow()) {
+      const r = anchor.getBoundingClientRect();
+      el.style.left = Math.max(8, Math.min(window.innerWidth - el.offsetWidth - 8, r.left)) + "px";
+      el.style.top = Math.max(8, Math.min(window.innerHeight - el.offsetHeight - 8, r.bottom + 6)) + "px";
+    }
+  }
   function buildExecTable() {
     const wrap = $("#exec-wrap");
     $("#exec-bar").innerHTML = `<button class="chip" id="x-pc">Go to PC</button><button class="chip" id="x-clear">Clear breakpoints</button>
-      <span class="grow"></span><span class="dim" style="font-size:12px;color:var(--muted)">Tap ● to set a breakpoint · ${R.rows.length} instructions</span>`;
+      <button class="chip" id="x-values" title="Inspect the selected instruction's current values">Values</button><span class="grow"></span><span class="dim" style="font-size:12px;color:var(--muted)">Tap Basic for values · ${R.rows.length} instructions</span>`;
     $("#x-pc").onclick = () => scrollExecToPc(true);
     $("#x-clear").onclick = () => { S.bps = {}; persist(); ed.setBreakpoints([]); markExecBps(); };
+    $("#x-values").onclick = e => { const selected = $("tr.cursor", wrap); inspectInstruction(e.currentTarget, R.rows[selected ? +selected.dataset.i : R.pcRow]); };
     if (!R.rows.length) { wrap.innerHTML = `<div class="empty">Nothing assembled yet.</div>`; return; }
     let h = `<table class="grid exec"><thead><tr><th></th><th>Address</th><th class="c-code">Code</th><th>Basic</th><th>Source</th></tr></thead><tbody>`;
     let lastKey = null;
@@ -1696,7 +2381,7 @@
       const first = key !== lastKey;
       lastKey = key;
       h += `<tr data-i="${i}"><td class="bp"></td><td class="addr dim">${M.hex(r.addr)}</td><td class="c-code dim">${M.hex(r.code)}</td>` +
-        `<td>${M.highlight(r.basic)}</td><td class="src">${first && r.line ? `<span class="ln">${r.line}</span>${M.highlight(r.source.trim())}` : ""}</td></tr>`;
+        `<td class="basic" tabindex="0" role="button" aria-label="Inspect current values for ${esc(r.basic)}" title="Tap or click to inspect current values">${M.highlight(r.basic)}</td><td class="src" title="Double-click to open source">${first && r.line ? `<span class="ln">${r.line}</span>${M.highlight(r.source.trim())}` : ""}</td></tr>`;
     });
     wrap.innerHTML = h + "</tbody></table>";
     R.trs = $$("tbody tr", wrap);
@@ -1709,7 +2394,9 @@
     const tr = e.target.closest("tr[data-i]");
     if (!tr) return;
     const r = R.rows[+tr.dataset.i];
-    if (e.target.closest("td.bp") || e.detail === 2) toggleBp(r.file, r.line);
+    if (e.target.closest("td.basic")) {
+      if (e.detail < 2) inspectInstruction(e.target.closest("td.basic"), r);
+    } else if (e.target.closest("td.bp") && e.detail < 2) toggleBp(r.file, r.line);
     else {
       R.trs && R.trs.forEach(t => t.classList.remove("cursor"));
       tr.classList.add("cursor");
@@ -1717,7 +2404,13 @@
   });
   $("#exec-wrap").addEventListener("dblclick", (e) => {
     const tr = e.target.closest("tr[data-i]");
-    if (tr && !e.target.closest("td.bp")) { const r = R.rows[+tr.dataset.i]; jumpTo(r.file, r.line, 1); }
+    if (!tr) return;
+    const r = R.rows[+tr.dataset.i];
+    if (e.target.closest("td.src")) jumpTo(r.file, r.line, 1);
+  });
+  $("#exec-wrap").addEventListener("keydown", e => {
+    const cell = e.target.closest("td.basic"), tr = cell?.closest("tr[data-i]");
+    if (tr && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); inspectInstruction(cell, R.rows[+tr.dataset.i]); }
   });
 
   function markExecBps() {
@@ -1744,13 +2437,15 @@
       if (i === undefined) return;
       if (R.trs && R.trs[i] && i !== R.pcRow) { R.trs[i].classList.add("trail" + (k + 1)); R.trailRows.push(R.trs[i]); }
       const r = R.rows[i];
-      if (r.file === S.current && !lines.has(r.line)) lines.set(r.line, k + 1);
+      if (!lines.has(r.file)) lines.set(r.file, new Map());
+      if (!lines.get(r.file).has(r.line)) lines.get(r.file).set(r.line, k + 1);
     });
-    ed.setTrail(lines);
+    for (const g of groups.groups) g.editor.setTrail(lines.get(g === groups.active ? S.current : groups.tab(g)?.path) || new Map());
   }
 
   function updatePc(follow) {
-    ed.setExecLine(execLineFor(S.current));
+    renderRuntimeValues();
+    for (const g of groups.groups) g.editor.setExecLine(execLineFor(groups.tab(g)?.path));
     if (!R.trs) return;
     const i = R.state ? R.addrIdx.get(R.state.pc) : undefined;
     const ni = i === undefined ? -1 : i;
@@ -2026,7 +2721,9 @@
       for (const name of M.ISA.names) for (const it of M.ISA.instructions.get(name)) {
         if (it.pseudo !== pseudo || !match(it.format, it.desc)) continue;
         if (++n > 700) break;
-        h += `<div class="hitem"><div class="f">${M.highlight(it.format)}</div><div class="d">${esc(it.desc)}</div></div>`;
+        const example = window.MIPS_EXAMPLES?.[name];
+        const details = example ? `<details class="help-example"><summary>Usage example</summary><pre><code>${example.split("\n").map(line => M.highlight(line)).join("\n")}</code></pre></details>` : "";
+        h += `<div class="hitem"><div class="f">${M.highlight(it.format)}</div><div class="d">${esc(it.desc)}</div>${details}</div>`;
       }
       if (!n) h = `<div class="empty">${M.ISA.names.length ? "No match." : "Connecting to the engine…"}</div>`;
     } else if (R.helpTab === "dirs") {
@@ -2037,11 +2734,16 @@
         h += `<div class="hitem"><div class="f"><span class="t-number">${n}</span> &nbsp;<b>${esc(name)}</b></div><div class="d">${args ? "in: " + M.highlight(args) : ""}${args && res ? " &nbsp;·&nbsp; " : ""}${res ? "out: " + M.highlight(res) : ""}</div></div>`;
     } else if (R.helpTab === "keys") {
       const keys = [["F3 · Ctrl+Shift+A", "Assemble (saves first)"], ["F5", "Run / continue — pauses while running"], ["F7", "Step one instruction"],
-        ["F8", "Step back (undo)"], ["F9", "Pause"], ["F11", "Stop"], ["F12", "Reset"], ["Ctrl+S", "Save"], ["Ctrl+/", "Toggle comment"],
+        ["F8", "Step back (undo)"], ["F9", "Pause"], ["F11", "Toggle fullscreen"], ["Shift+F11", "Stop"], ["Shift+F12", "Reset"], ["Ctrl+S", "Save"], ["Ctrl+/", "Toggle comment"],
+        ["Ctrl+F8", "Toggle breakpoint at the cursor (works with line numbers off)"], ["F4", "Toggle breakpoint at the cursor"],
+        ["Emacs C-f / C-b", "Forward / backward character"], ["Emacs C-n / C-p", "Next / previous line"],
+        ["Emacs C-a / C-e", "Beginning / end of line"], ["Emacs M-f / M-b", "Forward / backward word"],
+        ["Emacs M-< / M->", "Beginning / end of buffer"], ["Emacs M-g g", "Go to line"],
+        ["Ctrl+Shift+;", "Cycle scope values at the current label: off → readable → hex"],
         ["Tab / Shift+Tab", "Indent / dedent (or accept completion)"], ["Ctrl+Space", "Show completions"], ["Ctrl+B", "Toggle file sidebar"],
-        ["Alt+1…6", "Switch view"], ["Ctrl+J / Esc", "Show / hide console & registers while editing"], ["F10", "Zen mode (only code, fullscreen)"], ["Alt+L", "Line numbers on/off"], ["Ctrl+O · drop files anywhere", "Import files, folders or a .zip"], ["Ctrl+Shift+S", "Download the current file"],
+        ["Alt+1…6", "Switch view"], ["Ctrl+J / Esc", "Show / hide console & registers while editing"], ["F10", "Zen mode (hide chrome, preserve editor groups)"], ["Ctrl+\\", "Split editor right"], ["Ctrl+Shift+V", "Markdown source / preview"], ["Ctrl+K, V", "Markdown preview beside"], ["Alt+Shift+M", "Maximize / restore active pane"], ["Alt+Shift+G", "Next editor group"], ["Alt+L", "Line numbers on/off"], ["Ctrl+O · drop files anywhere", "Import files, folders or a .zip"], ["Ctrl+Shift+S", "Download the current file"],
         ["Alt+← / Alt+→ · back gesture · ‹", "Go back / forward to where you were (jumps, views, files)"], ["F1 · tap the hint bar", "Look up the instruction under the cursor on the reference card"], ["Click a register / memory word", "What it means now (syscall, pointer target, string, return address…), all formats, edit"],
-        ["Memory go-to box", "0x10010000 · msg · msg+4 · $sp-8 · pc"], ["Click gutter / ●", "Toggle breakpoint"], ["Double-click instruction", "Jump to its source line"]];
+        ["Memory go-to box", "0x10010000 · msg · msg+4 · $sp-8 · pc"], ["Click gutter / ●", "Toggle breakpoint"], ["Tap Basic / editor Values", "Inspect current register values"], ["Double-click Source", "Jump to its source line"]];
       h = keys.map(([k, d]) => `<div class="hitem"><span class="kbdk">${k}</span> &nbsp; <span class="d" style="display:inline">${d}</span></div>`).join("");
     } else {
       h = `<div class="about"><h2>MARS IDE</h2>
@@ -2049,6 +2751,7 @@
         <a href="https://dpetersanderson.github.io/" target="_blank" rel="noopener" style="color:var(--primary)">dpetersanderson.github.io</a>).
         The original MARS engine assembles and simulates your code; this UI talks to it over a small JSON protocol, the same one used by the terminal (TUI) version.<br><br>
         Dialog syscalls (50–59) open dialogs here; MIDI syscalls (31, 33) play through your speakers.
+        ${window.MARS_STATIC && window.MARS_BUILD ? `<br><br><span class="dim">Offline build: ${esc(window.MARS_BUILD)}</span>` : ""}
         <div style="margin-top:18px;color:var(--muted);font-size:12px">
         Source and issues: <a href="https://github.com/franticplant/mars-ide" target="_blank" rel="noopener" style="color:inherit">github.com/franticplant/mars-ide</a><br>
         Contact: <a href="mailto:franticplant@pm.me" style="color:inherit">franticplant@pm.me</a></div></div>`;
@@ -2073,14 +2776,15 @@
       <div class="set-sec">Theme</div><div class="themes">${themeCards}</div>
       <div class="row"><label>Syntax colours</label><select data-s="syntax"><option value="auto">Match theme</option>${Object.entries(M.THEMES).map(([k, t]) => `<option value="${k}" ${S.syntax === k ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></div>
       <div class="row"><label>Editor font size</label><select data-s="fontSize">${[11, 12, 13, 14, 15, 16, 18, 20].map(v => `<option ${S.fontSize == v ? "selected" : ""}>${v}</option>`).join("")}</select></div>
+      ${chk("emacs", "Emacs basic navigation (C-f/b, C-n/p, C-a/e, M-f/b)")}
       <div class="set-sec">Layout</div>
       ${chk("statusbar", "Show status bar (instruction hints, cursor position)")}
-      ${chk("lineNumbers", "Show line numbers (off: code uses the full width; set breakpoints in Execute) — Alt+L")}
+      ${chk("lineNumbers", "Show line numbers (off: a narrow breakpoint strip remains) — Alt+L")}
       ${chk("keybarOn", "Show editing key row above the on-screen keyboard")}
       <div class="row"><label>Key row size</label><select data-s="kbSize">${[["s", "Small"], ["m", "Medium"], ["l", "Large"]].map(([v, l]) => `<option value="${v}" ${(S.kbSize || "m") === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
       <div class="row"><label>Key row lines</label><select data-s="kbRows">${[[1, "One (scrolls sideways)"], [2, "Two (all keys visible)"]].map(([v, l]) => `<option value="${v}" ${(S.kbRows || 1) == v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
       ${chk("side", "Show file sidebar (Ctrl+B)")}
-      ${chk("zen", "Zen mode — hide all chrome, only code (F10)")}
+      ${chk("zen", "Zen mode — hide chrome, preserve editor groups (F10)")}
       <details class="diag"><summary>Layout diagnostics</summary><pre id="diag"></pre></details>
       <div class="set-sec">Assembler</div>
       ${chk("pseudo", "Permit extended (pseudo) instructions and formats")}
@@ -2116,7 +2820,15 @@
       S.theme = c.dataset.t; applyTheme(); persist();
       $$(".theme-card", m.el).forEach(x => x.classList.toggle("active", x === c));
     });
-    $$("input[type=checkbox][data-k]", m.el).forEach(c => c.onchange = () => { S[c.dataset.k] = c.checked; persist(); applyTheme(); });
+    $$("input[type=checkbox][data-k]", m.el).forEach(c => c.onchange = async () => {
+      if (c.dataset.k === "zen") { setZen(c.checked); return; }
+      if (c.dataset.k === "emacs") {
+        S.emacs = c.checked;
+        for (const group of groups.groups) group.editor.opts.emacs = S.emacs;
+        persist(); return;
+      }
+      S[c.dataset.k] = c.checked; persist(); applyTheme();
+    });
     $$("[data-s]", m.el).forEach(c => c.oninput = c.onchange = () => {
       const k = c.dataset.s;
       S[k] = (k === "fontSize" || k === "kbRows") ? +c.value : c.value;
@@ -2138,7 +2850,7 @@
     app.dataset.kb = S.kbSize || "m";
     app.classList.toggle("kb2", S.kbRows === 2);
     requestAnimationFrame(() => { if (typeof updateKbFade === "function") updateKbFade(); });
-    setTimeout(() => ed.measure(), 0);
+    setTimeout(() => { ed.measure(); groups.refresh(); }, 0);
   }
 
   // ------------------------------------------------------------------ splitters
@@ -2196,9 +2908,12 @@
   let pollTimer = null;
   function onEvent(ev) {
     switch (ev.ev) {
+      case "backend_error": toast("Experimental WasmGC engine failed. Use the normal JavaScript build. " + ev.message, "error", 15000); break;
+      case "storage_error": storageProblem(ev.message); break;
+      case "history_error": historyFailure(new Error(ev.message)); break;
       case "connected":
         $("#conn").classList.remove("off");
-        $("#conn").textContent = engine.native ? "engine" : "engine";
+        $("#conn").textContent = engine.local ? (window.MARS_BACKEND === "wasm" ? "WasmGC" : "JS") : "engine";
         const b = $(".conn-banner"); if (b) b.remove();
         hello();
         break;
@@ -2229,7 +2944,7 @@
         setWaiting(null);
         const r = ev.reason;
         if (r === "exit" || r === "error" || r === "stopped") finished(r, ev.errors);
-        else if (r === "breakpoint") { toast(`Breakpoint at ${M.hex(ev.state.pc)}`, "warn", 2200); if (!isNarrow() && S.view !== "edit") setView("exec"); }
+        else if (r === "breakpoint") toast(`Breakpoint at ${M.hex(ev.state.pc)}`, "warn", 2200);
         else if (r === "paused") toast("Paused", "", 1200);
         applyState(ev.state, true);
         if (!engine.local && R.fs) refreshTree();     // file syscalls may have written to the workspace
@@ -2241,8 +2956,10 @@
           const f = R.files.get(p);
           if (f && f.text === f.saved) {               // reload open, unmodified files
             engine.call("fs_read", { path: p }).then(rr => {
-              f.text = f.saved = rr.text;
+              if (R.files.get(p) !== f || f.text !== f.saved) return;
+              f.text = f.saved = rr.text; f.version = rr.version;
               if (p === S.current) ed.value = rr.text;
+              groups.refresh();
             }).catch(() => { });
           }
         }
@@ -2264,6 +2981,7 @@
       await refreshTree();
       // restore files
       if (!R.files.size) {
+        const initialView = S.view, initialMobileView = S.m;
         const want = S.open.slice();
         S.open = [];
         for (const p of want) await openFile(p, { focus: false });
@@ -2272,7 +2990,17 @@
           if (first) await openFile(first.path, { focus: false });
         }
         const cur = S.open.includes(S.current) ? S.current : S.open[0];
+        if (engine.local) {
+          // Preserve recovered unsaved text before rebuilding any editor views.
+          for (const [path, file] of R.files) if (file.text !== file.saved) {
+            try { await window.MarsIDBFS.checkpoint(path, file.text); } catch (e) { historyFailure(e); }
+          }
+        }
         if (cur) switchFile(cur);
+        groups.restore(initialLayout);
+        groups.sync(S.current);
+        if (S.view !== initialView) setView(initialView);
+        if (isNarrow() && S.m !== initialMobileView) setM(initialMobileView);
       }
       // restore a program that is already loaded in the engine (page reload / second tab)
       if (h.assembled && !R.assembled) {
@@ -2280,6 +3008,7 @@
         if (p.text) { loadProgram(p); R.assembled = true; }
       }
       if (h.state) { R.running = !!h.state.running; R.finished = !!h.state.finished; applyState(h.state, true); }
+      if (R.assembled && R.state) groups.refresh();
       if (h.waiting_input) setWaiting("input");
       if (h.speed !== undefined && h.speed !== S.speed) engine.call("speed", { value: S.speed }).catch(() => { });
       renderHelp(); renderRunbar(); updateHint();
@@ -2313,7 +3042,14 @@
   }
 
   // ------------------------------------------------------------------ keys
+  let groupChord = 0;
   document.addEventListener("keydown", (e) => {
+    if (e.defaultPrevented) return;
+    if (e.key === "F11" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (e.shiftKey) { e.preventDefault(); if (!$('.modal-bg')) ACT.stop(); }
+      else if (fsSupported() && !$('.modal-bg')) { e.preventDefault(); setFullscreen(!isFs()); }
+      return;
+    }
     if (e.key === "F10") { e.preventDefault(); if (!$(".modal-bg")) setZen(!S.zen); return; }
     if (e.key === "F1") {
       e.preventDefault();
@@ -2323,14 +3059,49 @@
     }
     if ($(".modal-bg")) return;
     const mod = e.ctrlKey || e.metaKey;
-    const map = { F3: "assemble", F5: "run", F7: "step", F8: "back", F9: "pause", F11: "stop", F12: "reset" };
+    if (mod && e.shiftKey && (e.key === ";" || e.key === ":" || e.code === "Semicolon")) {
+      e.preventDefault();
+      S.scopeValues = (S.scopeValues + 1) % 3;
+      persist(); refreshScopeValues();
+      toast(`Scope values: ${["off", "readable", "hex"][S.scopeValues]}`, "", 1400);
+      return;
+    }
+    if (groupChord > Date.now() && e.key.toLowerCase() === "v") {
+      e.preventDefault(); groupChord = 0;
+      if (/\.(md|markdown)$/i.test(S.current || "")) groups.split(groups.active, "right", { path: S.current, mode: "preview" });
+      return;
+    }
+    groupChord = 0;
+    if (mod && e.key.toLowerCase() === "k") { e.preventDefault(); groupChord = Date.now() + 1500; return; }
+    if (mod && e.key === "\\") { e.preventDefault(); groups.split(); return; }
+    if (mod && e.shiftKey && e.key.toLowerCase() === "v") { e.preventDefault(); groups.mode(); return; }
+    if (e.altKey && e.shiftKey && e.key.toLowerCase() === "m") { e.preventDefault(); groups.maximize(); return; }
+    if (e.altKey && e.shiftKey && e.key.toLowerCase() === "g") { e.preventDefault(); groups.nextGroup(); return; }
+    if (mod && e.key === "F8") {
+      e.preventDefault();
+      const path = ed.documentPath;
+      if (path && !/\.(md|markdown)$/i.test(path)) toggleBp(path, ed.cursor.line);
+      return;
+    }
+    if (e.key === "F4") {
+      e.preventDefault();
+      const path = ed.documentPath;
+      if (!path || /\.(md|markdown)$/i.test(path)) { toast("Open an assembly file to set breakpoints", "warn", 1600); return; }
+      const had = (S.bps[path] || []).includes(ed.cursor.line);
+      toggleBp(path, ed.cursor.line);
+      toast(`${had ? "Breakpoint removed" : "Breakpoint set"} at line ${ed.cursor.line}`, "", 1200);
+      return;
+    }
+    if (e.key === "F12" && e.shiftKey) { e.preventDefault(); ACT.reset(); return; }
+    const map = { F3: "assemble", F5: "run", F7: "step", F8: "back", F9: "pause" };
     if (map[e.key]) { e.preventDefault(); ACT[map[e.key]](); return; }
     if (mod && e.shiftKey && e.key.toLowerCase() === "s") { e.preventDefault(); exportFile(); return; }
     if (mod && e.key.toLowerCase() === "s") { e.preventDefault(); saveCurrent(); return; }
     if (mod && e.key.toLowerCase() === "o") { e.preventDefault(); pickFiles(); return; }
     if (mod && e.shiftKey && e.key.toLowerCase() === "a") { e.preventDefault(); ACT.assemble(); return; }
-    if (mod && e.key.toLowerCase() === "j") { e.preventDefault(); showPanels(!S.panels); return; }
+    if (mod && e.key.toLowerCase() === "j") { e.preventDefault(); toggleAllPanels(); return; }
     if (e.key === "Escape" && S.zen) { setZen(false); return; }
+    if (e.key === "Escape" && groups.maximized) { groups.maximize(); return; }
     if (e.key === "Escape" && document.activeElement === ed.ta && $(".ed-complete").hidden && S.panels && S.view === "edit") { showPanels(false); return; }
     if (mod && e.key.toLowerCase() === "b") { e.preventDefault(); S.side = !S.side; applyTheme(); persist(); return; }
     if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); history.back(); return; }
@@ -2344,32 +3115,40 @@
   $("#btn-side").onclick = () => { if (isNarrow()) { S.m = S.m === "files" ? "edit" : "files"; $("#app").dataset.m = S.m; renderBottomNav(); refreshTree(); } else { S.side = !S.side; applyTheme(); persist(); } };
   $("#btn-settings").onclick = openSettings;
   $("#btn-back").onclick = () => history.back();
-  $("#btn-panels").onclick = () => showPanels(!S.panels);
+  $("#btn-panels").onclick = toggleAllPanels;
+  $("#btn-console").innerHTML = icon("panelConsole"); $("#btn-console").onclick = () => togglePanel("console");
+  $("#btn-regs").innerHTML = icon("panelRegs"); $("#btn-regs").onclick = () => togglePanel("regs");
   $("#btn-zen").onclick = () => setZen(true);
   $("#btn-fs").onclick = () => setFullscreen(!isFs());
   $("#zen-exit").onclick = () => setZen(false);
-  ed.ta.addEventListener("focus", () => { $("#app").classList.add("typing"); $("#keybar").classList.toggle("show", isTouch() || !!S.kbDesktop); setTimeout(fitViewport, 250); });
-  ed.ta.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== ed.ta) $("#app").classList.remove("typing"); }, 120));
   $("#btn-newfile").onclick = () => newFile();
-  $("#btn-newdir").onclick = newDir;
+  $("#btn-newdir").onclick = () => newDir();
   $("#btn-refresh").onclick = refreshTree;
   $("#btn-import").onclick = () => pickFiles();
   $("#btn-export").onclick = () => exportWorkspace();
+  if (window.MARS_STATIC) { $("#btn-history").classList.remove("hidden"); $("#btn-history").onclick = showAllHistory; }
+  if (window.MARS_STATIC) { $("#btn-full-backup").classList.remove("hidden"); $("#btn-full-backup").onclick = exportFullBackup; }
   let resizeT = null;
   window.addEventListener("resize", () => {
     clearTimeout(resizeT);
     resizeT = setTimeout(() => { renderRegs(); if (S.view === "tools") refreshBitmap(); if (S.view === "mem") refreshMemory(); closeInspector(); }, 120);
   });
   window.matchMedia("(max-width: 899px)").addEventListener("change", () => { setView(S.view); applyTheme(); renderRegs(); updateFocus(); });
-  window.addEventListener("beforeunload", (e) => { if (S.open.some(isDirty)) saveDraftSoon(); });
+  window.addEventListener("beforeunload", (e) => {
+    for (const g of groups.groups) groups.captureView(g);
+    S.layout = groups.serialize(); persist();
+    if (S.open.some(isDirty) && !saveDrafts()) { e.preventDefault(); e.returnValue = ""; }
+  });
 
   applyTheme();
   renderChrome();
   fitViewport();
   showIoTab();
   renderMessages();
-  if (isNarrow() && !["edit", "exec", "mem", "labels", "tools", "help", "regs", "io"].includes(S.m)) S.m = "edit";
-  if (isNarrow() && ["regs", "io"].includes(S.m)) { setView("edit"); setM(S.m); } else setView(isNarrow() ? (["regs", "io"].includes(S.m) ? "edit" : S.m) : S.view);
+  if (isNarrow() && !["edit", "exec", "mem", "labels", "tools", "help", "regs", "io", "files"].includes(S.m)) S.m = "edit";
+  const initialMobileView = S.m;
+  if (isNarrow() && ["regs", "io", "files"].includes(initialMobileView)) { setView(S.view); setM(initialMobileView); }
+  else setView(isNarrow() ? initialMobileView : S.view);
   renderRegs();
   history.replaceState({ mars: 1, root: true }, "");
   history.pushState({ mars: 1, navI: 0 }, "");
@@ -2377,5 +3156,5 @@
   engine.on(onEvent);
   engine.start();
   setInterval(poll, 300);
-  window.MarsIDE = { S, R, engine, ACT };   // handy for debugging
+  window.MarsIDE = { S, R, engine, ACT, groups };   // handy for debugging
 })();

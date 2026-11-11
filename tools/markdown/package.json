@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "esbuild renderer.js --bundle --format=iife --minify --legal-comments=eof --outfile=../../web/vendor/markdown.js && node notices.cjs"
+  },
+  "dependencies": {
+    "dompurify": "3.4.17",
+    "highlight.js": "11.11.1",
+    "markdown-it": "14.3.3",
+    "mermaid": "12.3.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}

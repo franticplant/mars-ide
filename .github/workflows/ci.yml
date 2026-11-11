@@ -45,6 +45,14 @@ jobs:
           key: m2-${{ runner.os }}-${{ hashFiles('engine/teavm/pom.xml') }}
           restore-keys: m2-${{ runner.os }}-
 
+      - name: Cache Markdown build dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cache/npm
+            .cache/markdown-node
+          key: markdown-node22-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/markdown/package-lock.json') }}
+
       # Builds build/mars-engine.jar and engine/teavm/target/teavm/mars-engine.js, then runs
       # tests/conformance/run.py in the mars-conformance image (Java + Node + Python).
       - name: Build the engines

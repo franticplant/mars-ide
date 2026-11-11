@@ -20,7 +20,10 @@ web: ## Spawn the web IDE on http://127.0.0.1:8080, same workspace (PORT=, BIND=
 static: ## Spawn the static, server-less build on http://127.0.0.1:8081 (PORT=, BIND=)
 	scripts/spawn.sh static
 
-.PHONY: engine
+.PHONY: engine web-assets
+web-assets: ## Bundle the isolated Markdown / Mermaid renderer in a container
+	bash scripts/build-web.sh
+
 engine: ## Build the engine, web server and web UI -> build/mars-engine.jar
 	./build-all.sh engine
 
@@ -31,6 +34,14 @@ pylib: ## Install Textual for the TUI -> build/pylib
 .PHONY: static-site
 static-site: ## Build the static site (engine compiled to JS with TeaVM) -> build/static/
 	./build-all.sh static
+
+.PHONY: static-wasm
+static-wasm: ## Build the experimental WasmGC site separately -> build/static-wasm/
+	STATIC_ENGINE=wasm STATIC_OUT=build/static-wasm ./build-all.sh static
+
+.PHONY: compare-backends
+compare-backends: ## Compare JS/WasmGC size, Node timing and RSS (cached engines; TRIALS=3)
+	bash scripts/compare-backends.sh
 
 .PHONY: image
 image: ## Build the mars-ide images for amd64 + arm64 (ARCHES="amd64") and the phone archive

@@ -99,7 +99,7 @@
     return out;
   }
 
-  const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
+  const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
   const esc = s => s.replace(/[&<>"]/g, c => ESC[c]);
 
   /** Highlight a line to HTML. */

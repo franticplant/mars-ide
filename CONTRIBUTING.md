@@ -13,7 +13,7 @@
   them from repository secrets. Don't add third-party files without recording their origin and
   license in THIRD_PARTY_NOTICES.md.
 - **Localhost by default.** Anything that listens binds `127.0.0.1` unless the user asks
-  otherwise; containers run rootless and as a non-root user.
+  otherwise; containers run rootless with all capabilities dropped.
 
 ## Before you push
 

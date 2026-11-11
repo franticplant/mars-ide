@@ -24,6 +24,12 @@ step and step-back, and register, memory and label views. The Bitmap Display and
 Keyboard/Display MMIO tools are included, along with dialog and MIDI syscalls, a searchable
 MIPS reference card, and themes (including AMOLED black).
 
+The browser also supports [split editor groups and rich Markdown previews](docs/web-workspace.md),
+including Mermaid diagrams, highlighted code, tables, task lists and local images. Drag tabs
+between panes, or use the group menu on touchscreens. Zen preserves your pane arrangement;
+maximize a pane separately when you need to focus. Previews run in an isolated sandbox and
+remote images are opt-in.
+
 ### Credits
 
 MARS was created by **Pete Sanderson** and **Kenneth Vollmar** (Missouri State University) and is
@@ -66,10 +72,10 @@ docker for published images (`MARS_IMAGE=…`). Everything is published on `127.
 Already have the image? Run it directly:
 ```sh
 # terminal IDE on files in the current directory
-podman run --rm -it --userns=keep-id --user "$(id -u):$(id -g)" -v "$PWD":/work:z mars-ide:latest
+podman run --rm -it --user 0:0 --cap-drop=ALL --security-opt=no-new-privileges -v "$PWD":/work:z mars-ide:latest
 
 # web IDE — prints a URL with an access token; open it once per browser
-podman run --rm -p 127.0.0.1:8080:8080 --userns=keep-id --user "$(id -u):$(id -g)" -v "$PWD":/work:z mars-ide:latest web
+podman run --rm --user 0:0 -p 127.0.0.1:8080:8080 --cap-drop=ALL --security-opt=no-new-privileges -v "$PWD":/work:z mars-ide:latest web
 ```
 An empty `/work` is seeded with the example programs. Settings live in `/work/.mars-tui`.
 Set `MARS_WEB_TOKEN=…` to choose the token, or pass `web --no-auth` on trusted networks only.
@@ -84,9 +90,9 @@ Both UIs are built to give the code as much room as possible, and every piece of
 
 | | TUI | Web |
 |---|---|---|
-| Editing | one top row + code + one status line | 40 px bar + code + 22 px status |
+| Editing | one top row + code + one status line | top bar + group tabs + code + status |
 | Registers/console while editing | hidden; appear on run/step/input — **ctrl+j** toggles, **Esc** hides | same — **Ctrl+J** / **Esc**, panel button |
-| Zen mode (only code) | **F10** (Esc exits) | **F10** or ⤢ button |
+| Zen mode | **F10**: only code (Esc exits) | **F10** or ⤢ button: hide chrome, preserve editor groups |
 | Optional chrome | ☰ menu → Layout: status line, line numbers, machine-code column | Settings → Layout: status bar, line numbers, key row, sidebar |
 | Phones | one view at a time, ☰ menu (F4 / ctrl+e) has every action | bottom nav hides while typing; symbol key row (✕ to hide) |
 
@@ -109,10 +115,64 @@ one scrolling row / two full rows, **✕** hides it (More › Key row brings it 
 
 ## Keys (both UIs)
 
-F3 assemble · F5 run / pause · F7 step · F8 step back · F9 pause · F11 stop · F12 reset ·
+F3 assemble · F5 run / pause · F7 step · F8 step back · F9 pause · Shift+F12 reset ·
 F10 zen · ctrl+j panels · ctrl+s save · Tab accepts completion · click/tap the gutter or ● for breakpoints.
 TUI extras: F4/ctrl+e/☰ menu, ctrl+p command palette, F1 help, F2 settings. Ctrl alternatives:
 ctrl+b assemble, ctrl+r run, ctrl+t step, ctrl+g back, ctrl+l reset.
+Web: F11 toggles fullscreen, Shift+F11 stops execution. TUI: F11 stops execution.
+On wide web layouts, the separate console and registers buttons in the top bar hide or
+show either panel independently; the combined panels button / Ctrl+J still toggles both.
+
+Web: Settings → **Emacs basic navigation** enables the core movement keys. It deliberately
+does **not** take over browser keys such as paste or page navigation.
+
+| Keys | Action |
+|---|---|
+| `C-f` / `C-b` | forward / backward character |
+| `C-n` / `C-p` | next / previous line |
+| `C-a` / `C-e` | beginning / end of line |
+| `M-f` / `M-b` | forward / backward word |
+| `M-<` / `M->` | beginning / end of buffer |
+| `M-g g` | go to line |
+| `C-F8` / `F4` | toggle a breakpoint at the cursor |
+
+Breakpoints do not require line numbers: turning line numbers off leaves a narrow
+breakpoint strip, and `Ctrl+F8` or `F4` toggles the breakpoint on the cursor line.
+
+### Scope values in the editor
+
+`Ctrl+Shift+;` cycles a faint inline summary on the current label line:
+
+- **off** → **readable** → **hex** → off
+- Scope is the nearest preceding text label in the current file, through the next label.
+- Only registers referenced in that block are shown, capped at eight; `+N` shows overflow.
+- Readable mode uses decimals, labels and regions (`$t1=msg`, `$sp=.stack`) instead of raw hex.
+- It is a snapshot at the current PC. While running, values are sampled; memory is not read.
+- The compact Ctrl/Cmd+click card remains the detailed, token-level view.
+
+Normal browser paste (`Ctrl+V`), save (`Ctrl+S`) and page navigation remain available.
+
+In the web editor, **Ctrl/Cmd+click** a register, label or numeric literal for a compact
+current-value card. Registers show their role and, when paused, what their address points
+to (label, region and printable string). Labels show their address, region, current word
+and string without confusing the label's address with its contents. While the program is
+running, values are explicitly marked **running · sampled** and memory contents are not
+fetched; memory-mapped I/O is never read automatically. The old line-then-Values flow
+remains available for a full card, but token inspection does not require selecting a line.
+
+The static browser workspace records local file history automatically: saved versions,
+quiet-period drafts and files before deletion. Use a file's **History** button, or
+the workspace history button to find deleted files. Restore creates a new copy. History
+has no age-based eviction; it shares browser storage and is not a substitute for backups.
+If history cannot be stored, a warning is shown; an atomic file save that cannot record
+history is rejected rather than silently overwriting the previous file.
+
+The workspace's **Export full backup with history** button downloads saved bytes plus
+drafts, layout metadata and history in `.mars-backup/manifest.json`. Importing that ZIP
+offers to restore everything into a new folder, preserving drafts as separate files;
+the saved layout metadata is retained in the backup but is not applied automatically.
+Full backups include old and deleted contents and are not encrypted. Ordinary workspace
+exports remain separate. Browser storage can be lost; keep backup ZIPs elsewhere.
 
 ## Features
 

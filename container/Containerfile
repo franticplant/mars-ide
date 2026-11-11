@@ -18,7 +18,7 @@ ENV PATH=/opt/jre/bin:/usr/local/bin:/usr/bin:/bin \
     LANG=C.UTF-8 \
     HOME=/work
 WORKDIR /work
-# never run as root inside the container (override with --user / quadlet User=, e.g. with keep-id)
-USER 65532:65532
+# rootless Podman maps container root to the host user on /work; capabilities are dropped at run time
+USER 0:0
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/mars-entry"]

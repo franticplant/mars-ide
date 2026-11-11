@@ -46,7 +46,7 @@ with sync_playwright() as pw:
     cnt = p.evaluate("MarsIDE.R.state.count")
     print(f"loop: {cnt} instructions in {dt:.1f}s = {cnt / dt / 1e6:.2f} M instr/s; output tail:", repr(p.inner_text('#out')[-30:]))
     # pause works mid-run
-    p.keyboard.press("F12"); p.wait_for_timeout(500); p.keyboard.press("F5"); p.wait_for_timeout(300); p.keyboard.press("F9"); p.wait_for_timeout(800)
+    p.keyboard.press("Shift+F12"); p.wait_for_timeout(500); p.keyboard.press("F5"); p.wait_for_timeout(300); p.keyboard.press("F9"); p.wait_for_timeout(800)
     print("paused mid-run:", p.evaluate("!MarsIDE.R.running && !MarsIDE.R.finished"), "count:", p.evaluate("MarsIDE.R.state.count"))
     # dialog syscall
     p.evaluate(f"MarsIDE.engine.call('fs_write', {{path: 'dlg.asm', text: {DLG!r}}})"); p.wait_for_timeout(200)

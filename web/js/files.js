@@ -22,6 +22,7 @@
 
   /** Build a .zip (stored, no compression) from [{path, text}] → Blob. */
   function zip(files) {
+    if (files.length > 65535) throw new Error("Too many files for this ZIP format; split the backup.");
     const parts = [], central = [];
     let offset = 0;
     const now = new Date();
@@ -30,6 +31,8 @@
     for (const f of files) {
       const name = enc.encode(f.path);
       const data = typeof f.text === "string" ? enc.encode(f.text) : f.text;
+      if (name.length > 65535 || data.length > 0xffffffff || offset + 30 + name.length + data.length > 0xffffffff)
+        throw new Error("Backup is too large for this ZIP format; export in smaller parts.");
       const crc = crc32(data);
       const h = new DataView(new ArrayBuffer(30));
       h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true);
@@ -45,6 +48,7 @@
       offset += 30 + name.length + data.length;
     }
     const csize = central.reduce((n, b) => n + (b.byteLength || b.length), 0);
+    if (csize > 0xffffffff || offset + csize > 0xffffffff) throw new Error("Backup is too large for this ZIP format; export in smaller parts.");
     const e = new DataView(new ArrayBuffer(22));
     e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true);
     e.setUint32(12, csize, true); e.setUint32(16, offset, true);
@@ -63,13 +67,16 @@
     for (let k = 0; k < count; k++) {
       if (dv.getUint32(p, true) !== 0x02014b50) throw new Error("corrupt zip");
       const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true);
+      const expectedCRC = dv.getUint32(p + 16, true), expectedSize = dv.getUint32(p + 24, true);
       const nlen = dv.getUint16(p + 28, true), xlen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
       const lho = dv.getUint32(p + 42, true);
       const name = dec.decode(u8.subarray(p + 46, p + 46 + nlen));
       p += 46 + nlen + xlen + clen;
       if (name.endsWith("/")) continue;
+      if (dv.getUint32(lho, true) !== 0x04034b50) throw new Error(`corrupt zip header: ${name}`);
       const lnlen = dv.getUint16(lho + 26, true), lxlen = dv.getUint16(lho + 28, true);
       const start = lho + 30 + lnlen + lxlen;
+      if (start + csize > u8.length) throw new Error(`truncated zip entry: ${name}`);
       const raw = u8.subarray(start, start + csize);
       let bytes;
       if (method === 0) bytes = raw.slice();
@@ -78,6 +85,7 @@
         const ds = new Blob([raw]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
         bytes = new Uint8Array(await new Response(ds).arrayBuffer());
       } else throw new Error(`unsupported zip compression in ${name}`);
+      if (bytes.length !== expectedSize || crc32(bytes) !== expectedCRC) throw new Error(`corrupt zip entry (size/checksum mismatch): ${name}`);
       out.push({ path: name, bytes });
     }
     return out;

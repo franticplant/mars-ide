@@ -22,11 +22,19 @@ self.postMessage = (s) => {
   if (m.ev === "stopped") { stopped = m; if (stoppedRes) stoppedRes(m); return; }
   if (m.id && pending.has(m.id)) { const p = pending.get(m.id); pending.delete(m.id); m.ok ? p.res(m) : p.rej(new Error(m.error)); }
 };
-require(process.argv[2]).main([]);
 (async () => {
+  const timings = { start: performance.now() };
+  if (process.argv[2].endsWith(".wasm")) {
+    require(require("path").join(require("path").dirname(process.argv[2]), "mars-engine.wasm-runtime.js"));
+    const engine = await TeaVM.wasmGC.load(process.argv[2], { nodejs: true });
+    const task = engine.exports.main([]); if (task?.catch) task.catch(e => { throw e; });
+  } else require(process.argv[2]).main([]);
   await ready;
+  timings.startupMs = performance.now() - timings.start;
   for (const f of job.files) await send("fs_write", { path: f.path, text: f.text });
+  timings.assemble = performance.now();
   const asm = await send("assemble", { files: [job.main], main: job.main, settings: job.settings || {} });
+  timings.assembleMs = performance.now() - timings.assemble;
   if (!asm.success) { console.log(JSON.stringify({ assemble_error: asm.messages })); process.exit(0); }
   let result;
   if (job.mode === "pausing") {
@@ -52,11 +60,14 @@ require(process.argv[2]).main([]);
     for (let i = 0; i < (job.stepBack || 0); i++) st = (await send("backstep")).state;
     result = { reason, errors, state: st };
   } else {
+    timings.run = performance.now();
     const done = new Promise(r => (stoppedRes = r));
     await send("run");
     const m = stopped || await done;
+    timings.runMs = performance.now() - timings.run;
     result = { reason: m.reason, errors: m.errors, state: m.state };
   }
+  if (job.measure) { global.gc?.(); result.measure = { startupMs: timings.startupMs, assembleMs: timings.assembleMs, runMs: timings.runMs, memory: process.memoryUsage() }; }
   const st = result.state;
   if (st && st.gpr) {
     const spb = ((st.gpr[29] >>> 0) & ~3) - 512;

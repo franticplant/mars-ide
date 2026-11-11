@@ -28,12 +28,13 @@
       this.local = true;
       const FS = global.MarsIDBFS;
       this.internal = new Map();
+      this.mirroredVersions = new Map();
       this.lastPull = 0;
       this.worker = new Worker("engine/worker.js");
       this.worker.onmessage = (e) => {
         let m;
         try { m = JSON.parse(e.data); } catch (err) { return; }
-        if (m.ev === "ready") { this.pushAll().finally(() => this.setConnected(true)); return; }
+        if (m.ev === "ready") { this.pushAll().then(() => this.setConnected(true)).catch(e => this.storageError(e)); return; }
         if (typeof m.id === "string" && m.id.startsWith("int-")) {
           const p = this.internal.get(m.id);
           if (p) { this.internal.delete(m.id); m.ok ? p.res(m) : p.rej(new Error(m.error)); }
@@ -43,10 +44,18 @@
         else if (m.state && this.stepIds && this.stepIds.delete(m.id)) this.schedulePull();
         this.receive(m);
       };
-      this.worker.onerror = (e) => { console.error(e); this.emit({ ev: "disconnected" }); };
-      this.ready = FS.seed(global.MARS_EXAMPLES || []).catch(() => { });
+      this.worker.onerror = (e) => {
+        console.error(e);
+        if (global.MARS_BACKEND === "wasm") this.emit({ ev: "backend_error", message: e.message || "Unsupported backend or runtime error" });
+        this.emit({ ev: "disconnected" });
+      };
+      this.ready = FS.seed(global.MARS_EXAMPLES || []).catch(e => { this.storageFailure = e; this.storageError(e); });
       this.stepIds = new Set();
       if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => { });
+    }
+
+    storageError(error) {
+      if (!this.storageReported) { this.storageReported = true; this.emit({ ev: "storage_error", message: error.message || String(error) }); }
     }
 
     /** request/reply with the worker for the host's own bookkeeping (never shown to the UI) */
@@ -61,31 +70,39 @@
     async pushAll() {
       const FS = global.MarsIDBFS;
       await this.ready;
+      if (this.storageFailure) throw this.storageFailure;
       const files = await FS.files();
-      await Promise.all(files.map(f => this.workerCall("fs_write", { path: f.path, b64: FS.toB64(f.data) })));
+      await Promise.all(files.map(async f => {
+        await this.workerCall("fs_write", { path: f.path, b64: FS.toB64(f.data) });
+        this.mirroredVersions.set(f.path, f.version);
+      }));
       this.lastPull = Date.now();
     }
 
     schedulePull() {
       clearTimeout(this.pullTimer);
-      this.pullTimer = setTimeout(() => this.pullFromWorker().catch(e => console.error("sync", e)), 150);
+      this.pullTimer = setTimeout(() => this.pullFromWorker().catch(e => this.storageError(new Error("Program file changes could not be saved to browser storage. Keep this tab open and export a backup. " + e.message))), 150);
     }
 
     /** Copy files the program created/changed in the worker back into IndexedDB. */
     async pullFromWorker() {
       const FS = global.MarsIDBFS;
       const since = this.lastPull;
-      this.lastPull = Date.now();
+      const pulledAt = Date.now();
       const list = await this.workerCall("fs_list");
       const changed = [];
       for (const n of list.entries || []) {
         if (n.dir || (since && n.mtime && n.mtime < since - 1000)) continue;
         const r = await this.workerCall("fs_read", { path: n.path, binary: true });
+        const version = FS.fingerprintB64(r.b64), previous = this.mirroredVersions.get(n.path);
+        if (version === previous) continue; // An unchanged worker file must not overwrite another tab's edit.
         const mine = await FS.bytes(n.path);
-        if (mine && FS.toB64(mine) === r.b64) continue;
-        await FS.write(n.path, null, r.b64);
+        if (mine && FS.fingerprint(mine) === version) { this.mirroredVersions.set(n.path, version); continue; }
+        await FS.write(n.path, null, r.b64, previous ?? null);
+        this.mirroredVersions.set(n.path, version);
         changed.push(n.path);
       }
+      this.lastPull = pulledAt;
       if (changed.length) this.emit({ ev: "fs_changed", paths: changed });
     }
 
@@ -94,22 +111,42 @@
       let msg;
       try { msg = JSON.parse(line); } catch (e) { return; }
       const reply = (o) => this.receive(Object.assign({ id: msg.id, ok: true }, o));
-      const mirror = (cmd, args) => this.workerCall(cmd, args).catch(() => { });
+      const mirror = (cmd, args) => this.workerCall(cmd, args).catch(e => {
+        this.mirrorFailure = e;
+        this.storageError(new Error("The browser file was saved, but the simulator mirror failed. Export a backup and reload before assembling. " + e.message));
+        throw e;
+      });
       try {
+        if (msg.cmd === "assemble" && this.mirrorFailure) throw new Error("Simulator files are out of sync. Reload before assembling.");
         switch (msg.cmd) {
           case "fs_list": return reply(await FS.list());
           case "fs_read": return reply(await FS.read(msg.path, msg.binary));
           case "fs_write": {
-            const r = await FS.write(msg.path, msg.text, msg.b64);
+            const r = await FS.write(msg.path, msg.text, msg.b64, msg.expectedVersion);
             await mirror("fs_write", msg.b64 != null ? { path: r.path, b64: msg.b64 } : { path: r.path, text: msg.text == null ? "" : String(msg.text) });
+            this.mirroredVersions.set(r.path, r.version);
             return reply(r);
           }
-          case "fs_delete": { const r = await FS.remove(msg.path); await mirror("fs_delete", { path: msg.path }); return reply(r); }
-          case "fs_rename": { const r = await FS.rename(msg.from, msg.to); await mirror("fs_rename", { from: msg.from, to: msg.to }); return reply(r); }
+          case "fs_delete": {
+            const r = await FS.remove(msg.path); await mirror("fs_delete", { path: msg.path });
+            for (const path of this.mirroredVersions.keys()) if (path === msg.path || path.startsWith(msg.path + "/")) this.mirroredVersions.delete(path);
+            return reply(r);
+          }
+          case "fs_rename": {
+            const r = await FS.rename(msg.from, msg.to); await mirror("fs_rename", { from: msg.from, to: msg.to });
+            for (const [path, version] of [...this.mirroredVersions]) if (path === msg.from || path.startsWith(msg.from + "/")) {
+              this.mirroredVersions.delete(path); this.mirroredVersions.set(msg.to + path.slice(msg.from.length), version);
+            }
+            return reply(r);
+          }
           case "fs_mkdir": { const r = await FS.mkdir(msg.path); await mirror("fs_mkdir", { path: msg.path }); return reply(r); }
           case "step": this.stepIds.add(msg.id); break;
         }
-      } catch (e) { return this.receive({ id: msg.id, ok: false, error: e.message || String(e) }); }
+      } catch (e) {
+        if (e.code === "WORKSPACE_CONFLICT" || FS.readonly) this.storageError(e);
+        if (e.name === "QuotaExceededError" || /quota/i.test(e.message || "")) this.emit({ ev: "history_error", message: "Browser storage is full. The save was not completed; export your work and free space." });
+        return this.receive({ id: msg.id, ok: false, error: e.message || String(e) });
+      }
       this.worker.postMessage(line);
     }
 

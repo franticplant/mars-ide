@@ -4,7 +4,7 @@
 make test       # conformance suite
 make test-tui   # TUI pilot tests
 make test-web   # browser tests (web UI with server, static build)
-make test-all   # all three
+make test-all   # test, test-tui and test-web
 ```
 
 Run them on the laptop. Each builds what it needs first (engine jar, TeaVM engine, pylib,

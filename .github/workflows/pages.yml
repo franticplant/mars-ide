@@ -38,8 +38,16 @@ jobs:
           key: m2-${{ runner.os }}-${{ hashFiles('engine/teavm/pom.xml') }}
           restore-keys: m2-${{ runner.os }}-
 
+      - name: Cache Markdown build dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .cache/npm
+            .cache/markdown-node
+          key: markdown-node22-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/markdown/package-lock.json') }}
+
       - name: Build the static site
-        run: bash web/static/build-static.sh
+        run: STATIC_CSP=1 bash web/static/build-static.sh
 
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 

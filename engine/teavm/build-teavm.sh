@@ -3,10 +3,13 @@
 #   TARGET=JAVASCRIPT (default) | WEBASSEMBLY_GC
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+source scripts/container-user.sh
 TARGET=${TARGET:-JAVASCRIPT}
 FILE=mars-engine.js; [ "$TARGET" = WEBASSEMBLY_GC ] && FILE=mars-engine.wasm
+STAGE=${TEAVM_STAGE:-build/teavm-stage}
+OUT=${TEAVM_OUT:-engine/teavm/target}
+podman_run -i -e STAGE="$STAGE" -v "$PWD":/w:z -w /w "${PY_IMAGE:-docker.io/library/python:3.12-slim}" bash -se <<'PREP'
 [ -d build/core-src ] || python3 engine/patch_core.py vendor/Mars4_5.jar build/core-src
-STAGE=build/teavm-stage
 mkdir -p "$STAGE"; find "$STAGE" -mindepth 1 -delete
 mkdir -p "$STAGE/src" "$STAGE/res"
 cp -r build/core-src/java/. engine/src/. engine/teavm/src/. "$STAGE/src/"
@@ -41,7 +44,8 @@ for f in Path(sys.argv[1]).glob("*.java"):
         f.write_text(out, encoding="latin-1"); print("teavm: removed locks in", f.name)
 PY
 mkdir -p .cache/m2      # podman refuses to mount a path that does not exist (fresh checkouts)
-podman run --rm -v "$PWD":/w:z -v "$PWD/.cache/m2":/root/.m2:z -w /w/engine/teavm docker.io/library/maven:3.9-eclipse-temurin-21 \
-  mvn -q -B package -Dstaged.src=/w/$STAGE/src -Dstaged.res=/w/$STAGE/res -Dteavm.target=$TARGET -Dteavm.file=$FILE -Dteavm.minify=${MINIFY:-true} \
+PREP
+podman_run -v "$PWD":/w:z -v "$PWD/.cache/m2":/m2:z -e MAVEN_CONFIG=/tmp/maven -w /w/engine/teavm docker.io/library/maven:3.9-eclipse-temurin-21 \
+  sh -ec 'exec mvn "$@"' sh -q -B package -Dmaven.repo.local=/m2/repository -Dteavm.buildDirectory=/w/$OUT -Dstaged.src=/w/$STAGE/src -Dstaged.res=/w/$STAGE/res -Dteavm.target=$TARGET -Dteavm.file=$FILE -Dteavm.minify=${MINIFY:-true} \
       -DskipTests -Dmaven.test.skip=true 2>&1 | { grep -vE "^\[INFO\]|Download" || true; } | tail -60
-ls -la engine/teavm/target/teavm/ 2>/dev/null || true
+ls -la "$OUT/teavm/" 2>/dev/null || true

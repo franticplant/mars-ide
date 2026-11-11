@@ -54,7 +54,8 @@ under `build/` is committed; the jar is the single source.
 
 - `container/Containerfile` → `mars-ide`: Python slim + a jlink'd JRE (`java.base`,
   `jdk.httpserver`) + `build/pylib` + the engine jar. TUI by default, `web` for the server. Runs as
-  a non-root user. No `RUN` steps, so amd64 and arm64 images build on one machine without
+  root inside rootless Podman (mapped to your host user on `/work`), with all capabilities dropped
+  at run time. No `RUN` steps, so amd64 and arm64 images build on one machine without
   emulation.
 - `container/static/` → `mars-ide-static`: unprivileged nginx serving `build/static/`.
 - `container/mars-ide.container`: an example podman quadlet (systemd user service) for the web UI.

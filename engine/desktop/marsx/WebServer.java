@@ -159,8 +159,11 @@ public final class WebServer {
     private void files(HttpExchange ex) throws IOException {
         String path = ex.getRequestURI().getPath();
         if (path.equals("/")) path = "/index.html";
-        if (path.equals("/index.html") || path.equals("/manifest.webmanifest") || path.startsWith("/icon")) {
+        if (path.equals("/index.html") || path.equals("/manifest.webmanifest") || path.startsWith("/icon") ||
+                path.equals("/vendor/markdown.js") || path.equals("/remote-images.html") || path.equals("/js/remote-images.js")) {
             // the shell and icons are public so the login hint can render; data needs the token
+            // Sandboxed previews have opaque origins and cannot send the SameSite auth cookie.
+            // Only these immutable rendering assets are public, never workspace files or API data.
         } else if (!authorized(ex)) {
             send(ex, 401, "text/plain", "unauthorized".getBytes(StandardCharsets.UTF_8));
             return;
@@ -187,8 +190,13 @@ public final class WebServer {
         String ext = path.substring(path.lastIndexOf('.') + 1);
         ex.getResponseHeaders().set("Cache-Control", "no-cache");
         if (path.equals("/index.html")) {
+            // srcdoc inherits the shell CSP. Share a fresh response nonce with the isolated
+            // renderer so its locally fetched bundle works offline, without unsafe-inline.
+            String nonce = UUID.randomUUID().toString().replace("-", "");
+            data = new String(data, StandardCharsets.UTF_8).replace("</head>",
+                "<meta name=\"mars-script-nonce\" content=\"" + nonce + "\">\n</head>").getBytes(StandardCharsets.UTF_8);
             ex.getResponseHeaders().set("Content-Security-Policy",
-                "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'");
+                "default-src 'self'; script-src 'self' 'nonce-" + nonce + "'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'");
             ex.getResponseHeaders().set("X-Frame-Options", "DENY");
         }
         send(ex, 200, TYPES.getOrDefault(ext, "application/octet-stream"), data);

@@ -3,7 +3,10 @@
 # Build outputs (./build-all.sh, engine/teavm, web/static)
 /build/
 /dist/
+/web/vendor/
+/tools/markdown/node_modules/
 engine/teavm/target/
+/.java/
 
 # Container-side caches: Maven repository for TeaVM
 /.cache/

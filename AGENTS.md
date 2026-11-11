@@ -2,8 +2,10 @@
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) first; these are the points that matter most.
 
-- **Build on the laptop, never on the phone.** Builds and tests run in podman containers here.
-  Don't run builds, benchmarks or long tests on the user's phone; keep any phone run short.
+- **Build on the laptop, never on the phone.** Builds and tests run in rootless podman containers
+  here. Root inside is fine (rootless podman maps it to you on bind mounts); run workloads with
+  `--cap-drop=ALL --security-opt=no-new-privileges`. Don't run builds, benchmarks or long tests on
+  the user's phone; keep any phone run short.
 - Build and test with `make` (`make` alone lists the targets) or `./build-all.sh`. Before
   committing: `make test` for engine or execution changes, `make test-tui` for `mars_tui/`,
   `make test-web` for `web/`.

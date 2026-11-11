@@ -10,6 +10,7 @@
     <teavm.version>0.16.0</teavm.version>
     <maven.compiler.release>11</maven.compiler.release>
     <teavm.minify>true</teavm.minify>
+    <teavm.buildDirectory>${project.basedir}/target</teavm.buildDirectory>
     <project.build.sourceEncoding>ISO-8859-1</project.build.sourceEncoding>
   </properties>
   <dependencies>
@@ -17,6 +18,7 @@
     <dependency><groupId>org.teavm</groupId><artifactId>teavm-jso</artifactId><version>${teavm.version}</version><scope>provided</scope></dependency>
   </dependencies>
   <build>
+    <directory>${teavm.buildDirectory}</directory>
     <sourceDirectory>${staged.src}</sourceDirectory>
     <resources><resource><directory>${staged.res}</directory></resource></resources>
     <plugins>
@@ -45,4 +47,21 @@
       </plugin>
     </plugins>
   </build>
+  <profiles>
+    <profile>
+      <id>wasm-gc-runtime</id>
+      <activation><property><name>teavm.target</name><value>WEBASSEMBLY_GC</value></property></activation>
+      <build><plugins><plugin>
+        <groupId>org.teavm</groupId><artifactId>teavm-maven-plugin</artifactId><version>${teavm.version}</version>
+        <executions><execution>
+          <id>wasm-runtime</id><phase>process-classes</phase><goals><goal>copy-webassembly-gc-runtime</goal></goals>
+          <configuration>
+            <targetDirectory>${project.build.directory}/teavm</targetDirectory>
+            <runtimeFileName>mars-engine.wasm-runtime.js</runtimeFileName>
+            <minified>true</minified><modular>false</modular><deobfuscator>false</deobfuscator>
+          </configuration>
+        </execution></executions>
+      </plugin></plugins></build>
+    </profile>
+  </profiles>
 </project>

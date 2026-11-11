@@ -33,11 +33,28 @@ time of writing `rich` (MIT), `markdown-it-py` (MIT), `mdurl` (MIT), `mdit-py-pl
 their license files in their `*.dist-info/` directories; keep those directories in anything
 that ships `build/pylib`.
 
+## Browser Markdown renderer (shipped: server and static web UI)
+
+Built locally with `make web-assets`; no CDN or runtime dependency downloads. The bundle
+executes only in an opaque-origin preview sandbox, not in the IDE document.
+
+- markdown-it 14.3.3 — MIT, <https://github.com/markdown-it/markdown-it>
+- DOMPurify 3.4.17 — Apache-2.0 OR MPL-2.0, <https://github.com/cure53/DOMPurify>
+- highlight.js 11.11.1 — BSD-3-Clause, <https://github.com/highlightjs/highlight.js>
+- Mermaid 12.3.0 — MIT, <https://github.com/mermaid-js/mermaid>
+- esbuild 0.25.12 — MIT (build time only), <https://github.com/evanw/esbuild>
+
+Exact resolved transitive versions, origins and integrity hashes are recorded in
+`tools/markdown/package-lock.json`. `tools/markdown/notices.cjs` copies dependency license
+text and an inventory to the shipped `web/vendor/THIRD_PARTY.txt` on every asset build.
+Generated bundles/notices are build outputs and are not committed.
+
 ## TeaVM (build time; runtime library compiled into the static build)
 
 `engine/teavm/` compiles the engine to JavaScript with TeaVM 0.16.0 (Apache-2.0,
-<https://teavm.org/>). The generated `mars-engine.js` contains TeaVM's Java class library
-translated to JavaScript, so the static site ships Apache-2.0 code; Apache-2.0 notice
+<https://teavm.org/>). The generated `mars-engine.js` (or experimental `mars-engine.wasm`)
+contains TeaVM's Java class library. The Wasm build also ships the matching generated
+`mars-engine.wasm-runtime.js` loader from TeaVM 0.16.0. These ship Apache-2.0 code; notice
 obligations apply to it.
 
 ## Java runtime (shipped: container image)

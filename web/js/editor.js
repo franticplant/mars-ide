@@ -32,13 +32,33 @@
       this.trail = new Map();       // line -> 1..5 (recently executed, fading)
       this.items = [];
       this.sel = 0;
+      this.scope = null;
       this.ta.addEventListener("input", () => { this.render(); this.updateCompletion(); this.opts.onChange && this.opts.onChange(); });
       this.ta.addEventListener("scroll", () => this.syncScroll());
+      // Some browsers send Shift+wheel as vertical motion even on an unwrapped textarea.
+      this.ta.addEventListener("wheel", e => {
+        if (!e.shiftKey || e.ctrlKey || e.metaKey || !e.deltaY || this.ta.scrollWidth <= this.ta.clientWidth) return;
+        const scale = e.deltaMode === 1 ? this.lh : e.deltaMode === 2 ? this.ta.clientWidth : 1;
+        const before = this.ta.scrollLeft;
+        this.ta.scrollLeft += e.deltaY * scale;
+        if (this.ta.scrollLeft !== before) e.preventDefault();
+      }, { passive: false });
       this.ta.addEventListener("keydown", (e) => this.onKey(e));
       this.ta.addEventListener("keyup", () => this.cursorMoved());
       this.ta.addEventListener("click", () => { this.cursorMoved(); this.hideCompletion(); });
+      this.ta.addEventListener("mousedown", (e) => {
+        if (e.button !== 0 || !(e.ctrlKey || e.metaKey) || !this.opts.onInspectToken) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const r = this.ta.getBoundingClientRect();
+        const line = Math.max(1, Math.min(this.lines.length || 1,
+          Math.floor((e.clientY - r.top - this.padTop + this.ta.scrollTop) / this.lh) + 1));
+        const col = Math.max(1, Math.round((e.clientX - r.left - this.padLeft + this.ta.scrollLeft) / this.cw) + 1);
+        this.opts.onInspectToken(line, col, this.lines[line - 1] || "", { x: e.clientX, y: e.clientY });
+      });
       this.ta.addEventListener("blur", () => setTimeout(() => this.hideCompletion(), 150));
-      document.addEventListener("selectionchange", () => { if (document.activeElement === this.ta) this.cursorMoved(); });
+      this.selectionChanged = () => { if (document.activeElement === this.ta) this.cursorMoved(); };
+      document.addEventListener("selectionchange", this.selectionChanged);
       this.gutterBox.addEventListener("click", (e) => {
         const el = e.target.closest(".g");
         if (el && this.opts.onToggleBreakpoint) this.opts.onToggleBreakpoint(+el.dataset.line);
@@ -47,7 +67,7 @@
         const it = e.target.closest(".ci");
         if (it) { e.preventDefault(); this.sel = +it.dataset.i; this.acceptCompletion(); }
       });
-      new ResizeObserver(() => this.measure()).observe(host);
+      this.observer = new ResizeObserver(() => this.measure()); this.observer.observe(host);
       this.measure();
     }
 
@@ -65,10 +85,13 @@
       this.cursorMoved();
     }
 
+    destroy() { this.observer.disconnect(); document.removeEventListener("selectionchange", this.selectionChanged); }
+
     // ------------------------------------------------------------ content
     get value() { return this.ta.value; }
     set value(v) {
-      this.ta.value = v;
+      this._settingValue = true;
+      try { this.ta.value = v; } finally { this._settingValue = false; }
       this.render();
       this.ta.scrollTop = 0;
       this.ta.scrollLeft = 0;
@@ -77,7 +100,15 @@
     focus() { this.ta.focus({ preventScroll: true }); }
 
     setMarks(marks) { this.marks = marks || new Map(); this.render(true); }
-    setBreakpoints(lines) { this.bps = new Set(lines); this.renderGutter(true); }
+    setScopeValues(line, html) {
+      const next = line && html ? { line, html } : null;
+      const old = this.scope;
+      if (old?.line === next?.line && old?.html === next?.html) return;
+      this.scope = next;
+      if (old?.line) this.renderLine(old.line - 1, true);
+      if (next) this.renderLine(next.line - 1, true);
+    }
+    setBreakpoints(lines) { this.bps = new Set(lines); this.render(true); }
     setExecLine(line) {
       if (line === this.exec) return;
       const old = this.exec;
@@ -121,7 +152,7 @@
       }
       const line = this.lines[i];
       const mark = this.marks.get(i + 1);
-      let html = line.length ? highlight(line) : "";
+      let html = line.length ? (this.plainText ? esc(line) : highlight(line)) : "";
       if (mark && mark.kind === "error" && mark.col > 0 && line.length) {
         // underline the offending token
         const s = mark.col - 1;
@@ -131,8 +162,11 @@
         html = highlight(line.slice(0, s)) + `<span class="errtok">${highlight(line.slice(s, e))}</span>` + highlight(line.slice(e));
       }
       el.innerHTML = html || "&#8203;";
+      if (this.scope?.line === i + 1) {
+        el.innerHTML += ` <span class="scope-values" title="Current values for this label block">${this.scope.html}</span>`;
+      }
       const tr = this.exec !== i + 1 ? this.trail.get(i + 1) : 0;
-      el.className = "l" + (mark ? (mark.kind === "error" ? " err" : " warn") : "") + (this.exec === i + 1 ? " exec" : "") + (tr ? " trail" + tr : "");
+      el.className = "l" + (this.bps.has(i + 1) ? " bp" : "") + (mark ? (mark.kind === "error" ? " err" : " warn") : "") + (this.exec === i + 1 ? " exec" : "") + (tr ? " trail" + tr : "");
       if (mark) el.title = mark.msg; else el.removeAttribute("title");
     }
 
@@ -204,6 +238,72 @@
         this.ta.scrollTop = Math.max(0, top - h / 2);
     }
 
+    // ------------------------------------------------------------ Emacs navigation
+    emacsSet(pos) {
+      const ta = this.ta, value = ta.value;
+      pos = Math.max(0, Math.min(value.length, pos));
+      ta.setSelectionRange(pos, pos);
+      this.cursorMoved();
+      this.revealLine(this.cursor.line);
+    }
+    emacsColumn() {
+      const p = this.ta.selectionStart, v = this.ta.value, ls = v.lastIndexOf("\n", p - 1) + 1;
+      return p - ls;
+    }
+    emacsVertical(delta) {
+      const v = this.ta.value, p = this.ta.selectionEnd, col = this.emacsColumn();
+      const ls = v.lastIndexOf("\n", p - 1) + 1;
+      if (delta < 0) {
+        if (ls === 0) return this.emacsSet(0);
+        const ps = v.lastIndexOf("\n", ls - 2) + 1;
+        const pe = ls - 1;
+        return this.emacsSet(Math.min(ps + col, pe));
+      }
+      const le = v.indexOf("\n", p);
+      if (le < 0) return this.emacsSet(v.length);
+      const ns = le + 1, ne = v.indexOf("\n", ns), end = ne < 0 ? v.length : ne;
+      return this.emacsSet(Math.min(ns + col, end));
+    }
+    emacsWord(direction) {
+      const v = this.ta.value, word = c => /[\w$]/.test(c);
+      let p = direction > 0 ? this.ta.selectionEnd : this.ta.selectionStart;
+      if (direction > 0) {
+        while (p < v.length && !word(v[p])) p++;
+        while (p < v.length && word(v[p])) p++;
+      } else {
+        while (p > 0 && !word(v[p - 1])) p--;
+        while (p > 0 && word(v[p - 1])) p--;
+      }
+      this.emacsSet(p);
+    }
+    emacsKey(e) {
+      const key = e.key.toLowerCase(), alt = e.altKey, mod = e.ctrlKey || e.metaKey;
+      if (this._emacsChord === "g") {
+        this._emacsChord = null;
+        if (!alt && !mod && key === "g") { e.preventDefault(); this.opts.onGotoLine?.(); return true; }
+      }
+      if (alt && key === "g" && !mod) {
+        e.preventDefault(); this._emacsChord = "g";
+        clearTimeout(this._emacsTimer); this._emacsTimer = setTimeout(() => this._emacsChord = null, 1600);
+        return true;
+      }
+      if (mod && !alt) {
+        if (key === "f") { e.preventDefault(); this.emacsSet(this.ta.selectionEnd + 1); return true; }
+        if (key === "b") { e.preventDefault(); this.emacsSet(this.ta.selectionStart - 1); return true; }
+        if (key === "n") { e.preventDefault(); this.emacsVertical(1); return true; }
+        if (key === "p") { e.preventDefault(); this.emacsVertical(-1); return true; }
+        if (key === "a") { e.preventDefault(); const p = this.ta.selectionStart, v = this.ta.value; this.emacsSet(v.lastIndexOf("\n", p - 1) + 1); return true; }
+        if (key === "e") { e.preventDefault(); const p = this.ta.selectionEnd, v = this.ta.value, le = v.indexOf("\n", p); this.emacsSet(le < 0 ? v.length : le); return true; }
+      }
+      if (alt && !mod) {
+        if (key === "f") { e.preventDefault(); this.emacsWord(1); return true; }
+        if (key === "b") { e.preventDefault(); this.emacsWord(-1); return true; }
+        if (e.key === "<" || (e.shiftKey && e.code === "Comma")) { e.preventDefault(); this.emacsSet(0); return true; }
+        if (e.key === ">" || (e.shiftKey && e.code === "Period")) { e.preventDefault(); this.emacsSet(this.ta.value.length); return true; }
+      }
+      return false;
+    }
+
     // ------------------------------------------------------------ editing
     insert(text) {
       this.ta.focus({ preventScroll: true });
@@ -231,6 +331,7 @@
     }
 
     toggleComment() {
+      if (this.plainText) return;
       const [s, e] = this.selectedLineRange();
       const lines = this.ta.value.slice(s, e).split("\n");
       const all = lines.filter(l => l.trim()).every(l => /^\s*#/.test(l));
@@ -239,6 +340,7 @@
 
     onKey(e) {
       const mod = e.ctrlKey || e.metaKey;
+      if (this.opts.emacs && this.emacsKey(e)) return;
       if (!this.pop.hidden) {
         if (e.key === "ArrowDown") { e.preventDefault(); this.sel = (this.sel + 1) % this.items.length; this.drawCompletion(); return; }
         if (e.key === "ArrowUp") { e.preventDefault(); this.sel = (this.sel - 1 + this.items.length) % this.items.length; this.drawCompletion(); return; }
@@ -258,7 +360,7 @@
         const ls = v.lastIndexOf("\n", pos - 1) + 1;
         const cur = v.slice(ls, pos);
         let indent = (cur.match(/^\s*/) || [""])[0];
-        if (/^\s*[A-Za-z_][\w.$]*:\s*$/.test(cur)) indent = "        ";   // after "label:" indent the body
+        if (!this.plainText && /^\s*[A-Za-z_][\w.$]*:\s*$/.test(cur)) indent = "        ";   // after "label:" indent the body
         e.preventDefault();
         this.insert("\n" + indent);
         return;
@@ -284,6 +386,7 @@
     }
 
     updateCompletion(force = false) {
+      if (this.plainText) { this.hideCompletion(); return; }
       if (this.opts.completion === false) return;
       const w = this.wordAtCursor();
       if (!w || (!force && w.length < 2 && !w.startsWith("."))) { this.hideCompletion(); return; }
@@ -296,26 +399,32 @@
 
     drawCompletion() {
       const { line, col } = this.cursor;
-      const gw = this.gutterBox.getBoundingClientRect().width;
-      const x = gw + this.padLeft + (col - 1 - this.prefix.length) * this.cw - this.ta.scrollLeft;
-      const y = this.padTop + line * this.lh - this.ta.scrollTop + 2;
+      let x = this.padLeft + (col - 1 - this.prefix.length) * this.cw - this.ta.scrollLeft;
+      let y = this.padTop + line * this.lh - this.ta.scrollTop + 2;
       this.pop.innerHTML = this.items.map((it, i) =>
         `<div class="ci${i === this.sel ? " sel" : ""}" data-i="${i}"><span class="ci-f">${highlight(it.format)}</span>` +
         `<span class="ci-d">${it.pseudo ? '<span class="t-pseudo">pseudo · </span>' : ""}${esc(it.desc || "")}</span></div>`).join("");
       this.pop.hidden = false;
-      const maxX = this.host.clientWidth - Math.min(this.pop.offsetWidth, this.host.clientWidth) - 4;
-      this.pop.style.left = Math.max(4, Math.min(x - gw, maxX)) + "px";
+      const width = this.pop.parentElement.clientWidth;
+      const maxX = width - Math.min(this.pop.offsetWidth, width) - 4;
+      this.pop.style.left = Math.max(4, Math.min(x, maxX)) + "px";
       const below = y + this.pop.offsetHeight < this.host.clientHeight;
       this.pop.style.top = (below ? y : Math.max(0, y - this.lh - this.pop.offsetHeight - 4)) + "px";
       const el = this.pop.children[this.sel];
-      if (el) el.scrollIntoView({ block: "nearest" });
+      if (el) {
+        if (el.offsetTop < this.pop.scrollTop) this.pop.scrollTop = el.offsetTop;
+        else if (el.offsetTop + el.offsetHeight > this.pop.scrollTop + this.pop.clientHeight)
+          this.pop.scrollTop = el.offsetTop + el.offsetHeight - this.pop.clientHeight;
+      }
     }
 
     acceptCompletion() {
+      clearTimeout(this._completionTimer);
       const it = this.items[this.sel];
       if (it) {
         const rest = it.name.slice(this.prefix.length);
-        this.insert(rest + (it.name.startsWith(".") ? " " : " "));
+        this._acceptingCompletion = true;
+        try { this.insert(rest + " "); } finally { this._acceptingCompletion = false; }
       }
       this.hideCompletion();
     }

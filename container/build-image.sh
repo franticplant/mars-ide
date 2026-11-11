@@ -13,7 +13,7 @@ for arch in $ARCHES; do
     mkdir -p build/jmods-$arch
     podman cp "$ctr:/opt/java/openjdk/jmods/." build/jmods-$arch/
     podman rm -f "$ctr" >/dev/null
-    podman run --rm --platform linux/amd64 -v "$PWD/build":/b:z $JDK sh -ec "
+    podman run --rm --cap-drop=ALL --security-opt=no-new-privileges --platform linux/amd64 -v "$PWD/build":/b:z $JDK sh -ec "
       jlink --module-path /b/jmods-$arch --add-modules java.base,jdk.httpserver \
             --strip-debug --no-man-pages --no-header-files --compress=zip-6 --output /b/jre-$arch"
   fi

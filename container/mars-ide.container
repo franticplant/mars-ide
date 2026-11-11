@@ -10,10 +10,9 @@ After=network-online.target
 Image=localhost/mars-ide:amd64
 ContainerName=mars-ide
 Exec=web --port 8080
-UserNS=keep-id
-# your uid and gid (id -u, id -g), so the workspace stays yours
-User=1003
-Group=1003
+# rootless podman maps container root to you on /work
+User=0
+Group=0
 Volume=%h/mars-workspace:/work:Z
 EnvironmentFile=%h/.config/mars-ide/env
 # localhost + tailnet only — never the public interfaces

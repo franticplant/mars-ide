@@ -66,10 +66,13 @@ bind=${BIND:-127.0.0.1}
 ws=${MARS_WORKSPACE:-$caller_pwd}
 tty_args=(-i)
 [[ -t 0 && -t 1 ]] && tty_args=(-it)
-# Never run as root, also not as the image's own user: keep the files in the workspace
-# owned by you.
-user_args=(--user "$(id -u):$(id -g)")
-[[ $ctr == podman ]] && user_args=(--userns=keep-id "${user_args[@]}")
+# Rootless podman maps container root to you on the bind mount, so root inside keeps the
+# workspace yours. Rootful docker would leave root-owned files, so keep your UID there.
+if [[ $ctr == podman ]]; then
+  user_args=(--user 0:0)
+else
+  user_args=(--user "$(id -u):$(id -g)")
+fi
 hardening=(--cap-drop=ALL --security-opt=no-new-privileges)
 
 if [[ $mode == static ]]; then

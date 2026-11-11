@@ -72,6 +72,10 @@
 
   async function cString(a, ctx) {
     try {
+      // A running program can change memory between the instruction and this
+      // read. Never imply that such a peek is the value used by an execution.
+      if (ctx.running) return null;
+      if ((a >>> 0) >= 0xffff0000) return null;
       const res = await ctx.engine.call("memory", { addr: (a & ~3) | 0, words: 20 }, 4000);
       const bytes = [];
       for (const w of res.words) for (let b = 0; b < 4; b++) bytes.push((w >>> (8 * b)) & 255);
@@ -205,5 +209,5 @@
     return out;
   }
 
-  global.MipsMeaning = { gprMeaning, specialMeaning, cop0Meaning, fprMeaning, memMeaning, ROLE };
+  global.MipsMeaning = { gprMeaning, specialMeaning, cop0Meaning, fprMeaning, memMeaning, ROLE, region, labelFor, cString };
 })(window);

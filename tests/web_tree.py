@@ -137,6 +137,11 @@ def node_btn(p, path, action):
     loc.hover(); loc.locator(f"[data-a='{action}']").click()
 
 
+def node_menu_action(p, path, label):
+    p.locator(f"#tree .node[data-p='{path}']").click(button="right")
+    p.locator(".node-menu button").filter(has_text=re.compile("^" + re.escape(label) + "$")).click()
+
+
 with sync_playwright() as pw:
     b = pw.chromium.launch(executable_path="/usr/bin/chromium", args=["--no-sandbox"])
     # ------------------------------------------------------------------ desktop
@@ -193,7 +198,7 @@ with sync_playwright() as pw:
     check("n.asm" not in fs and not any(f.endswith("/n.asm") for f in fs), "Cancel: nothing extracted")
 
     # ---- 5. zip via the folder's import button → defaults to that folder
-    pick(p, [Z4], via=lambda: node_btn(p, "docs", "imp"))
+    pick(p, [Z4], via=lambda: node_menu_action(p, "docs", "Import here"))
     p.wait_for_selector(".modal .zip-chips")
     check(p.input_value(".modal input.text") == "docs", "folder import button: default = that folder")
     modal_btn(p, "Extract")
@@ -289,8 +294,8 @@ with sync_playwright() as pw:
     check(wait_tree(p, "kept/a.asm"), "rename folder keep → kept")
     check(p.evaluate("MarsIDE.S.current") == "kept/a.asm" and "kept/a.asm" in p.evaluate("MarsIDE.S.bps"), "rename: tab + breakpoints follow")
 
-    # ---- 14. "Move to…" dialog (desktop button)
-    node_btn(p, "x.asm", "move")
+    # ---- 14. "Move to…" remains available from the context menu
+    node_menu_action(p, "x.asm", "Move to…")
     p.wait_for_selector(".modal .dir-pick")
     p.click(".modal .dir-pick button[data-d='kept']")
     modal_btn(p, "Move")
