@@ -35,6 +35,10 @@ pylib: ## Install Textual for the TUI -> build/pylib
 static-site: ## Build the static site (engine compiled to JS with TeaVM) -> build/static/
 	./build-all.sh static
 
+.PHONY: single
+single: ## Build the one-file IDE that opens from disk -> build/single/mars-ide.html
+	bash scripts/build-single.sh
+
 .PHONY: static-wasm
 static-wasm: ## Build the experimental WasmGC site separately -> build/static-wasm/
 	STATIC_ENGINE=wasm STATIC_OUT=build/static-wasm ./build-all.sh static

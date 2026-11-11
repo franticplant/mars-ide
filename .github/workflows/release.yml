@@ -7,13 +7,14 @@ name: Release
 # Assets:
 #   mars-engine-<tag>.jar            engine + web server + web UI (java -jar …, Java 11+)
 #   mars-ide-static-<tag>.tar.gz     the static site: copy to any static file host
+#   mars-ide.html                    the whole IDE in one file: download and double-click
 #   mars-ide-<tag>-arm64.tar         OCI archive of the arm64 image (podman load -i …)
 #   SHA256SUMS
 # Images, multi-arch (amd64 + arm64), pushed to the GitHub container registry:
 #   ghcr.io/<owner>/mars-ide:<tag>, ghcr.io/<owner>/mars-ide-static:<tag>
 #
 # Triggered by pushing a tag like v0.1.0, or manually for an existing tag. Tags with a suffix
-# (v0.2.0-rc1) and every v0.x release are marked pre-release.
+# (v0.2.0-rc1) are marked pre-release.
 #
 # Release notes come from docs/release-notes/<tag>.md at the tag, so write that before
 # tagging; without it, GitHub's generated notes are used. Build details are appended either way.
@@ -77,6 +78,7 @@ jobs:
         run: |
           make pylib
           SKIP_TEAVM=1 ./build-all.sh static
+          SKIP_SITE=1 bash scripts/build-single.sh
           ARCHES="amd64 arm64" bash container/build-image.sh
           podman build -q --platform linux/amd64,linux/arm64 --manifest mars-ide-static:latest \
             -f container/static/Containerfile .
@@ -87,6 +89,7 @@ jobs:
           cp build/mars-engine.jar "dist/mars-engine-$TAG.jar"
           tar -C build -czf "dist/mars-ide-static-$TAG.tar.gz" --owner=0 --group=0 --numeric-owner static
           cp build/mars-ide-arm64.tar "dist/mars-ide-$TAG-arm64.tar"
+          cp build/single/mars-ide.html dist/mars-ide.html
           (cd dist && sha256sum -- * > SHA256SUMS)
           cat dist/SHA256SUMS
 
@@ -157,7 +160,7 @@ jobs:
           CONFORMANCE: ${{ needs.build.outputs.conformance }}
         run: |
           prerelease=""
-          if [[ "$TAG" == *-* || "$TAG" == v0.* ]]; then prerelease="--prerelease"; fi
+          if [[ "$TAG" == *-* ]]; then prerelease="--prerelease"; fi
           if gh release view "$TAG" > /dev/null 2>&1; then
             echo "::error::$TAG is already released; releases are immutable. Cut a new tag."
             exit 1

@@ -1578,7 +1578,7 @@
     const exact = f.startsWith("=") ? f.slice(1) : null;
     const match = (...xs) => !f || (exact ? xs[0] === exact : xs.some(x => String(x).toLowerCase().includes(f)));
     let h = `<div class="card-top"><b>${esc(CARD.title || "Reference card")}</b><span class="grow"></span>
-      <a class="chip" href="ref/MIPS_Reference.pdf" target="_blank" rel="noopener">Open original PDF ↗</a></div>`;
+      <a class="chip" href="${window.MARS_PDF_URL || "ref/MIPS_Reference.pdf"}" target="_blank" rel="noopener">Open original PDF ↗</a></div>`;
     const ins = CARD.instructions.filter(i => match(i.m, i.name, i.op, i.fmt + "-type", i.code));
     if (ins.length) {
       h += `<div class="card-sec">Instructions <span>tap a row for its encoding and example</span></div><table class="grid cardtab"><tbody>` +

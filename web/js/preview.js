@@ -28,8 +28,8 @@
   }
   let rendererSource;
   function rendererText() {
-    if (!rendererSource) rendererSource = fetch(new URL("vendor/markdown.js", document.baseURI), { credentials: "omit" })
-      .then(response => { if (!response.ok) throw new Error("Renderer unavailable"); return response.text(); })
+    if (!rendererSource) rendererSource = (window.MARS_MARKDOWN ? window.MARS_MARKDOWN() : fetch(new URL("vendor/markdown.js", document.baseURI), { credentials: "omit" })
+      .then(response => { if (!response.ok) throw new Error("Renderer unavailable"); return response.text(); }))
       .catch(error => { rendererSource = null; throw error; });
     return rendererSource;
   }

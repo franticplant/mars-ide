@@ -30,7 +30,7 @@
       this.internal = new Map();
       this.mirroredVersions = new Map();
       this.lastPull = 0;
-      this.worker = new Worker("engine/worker.js");
+      this.worker = new Worker(global.MARS_WORKER_URL || "engine/worker.js");
       this.worker.onmessage = (e) => {
         let m;
         try { m = JSON.parse(e.data); } catch (err) { return; }
