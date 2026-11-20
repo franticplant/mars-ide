@@ -30,6 +30,11 @@ public final class MarsEngine {
     /** Instructions per uninterrupted run slice, and pause between slices (-1 = none). Browser builds use small slices. */
     public static int CHUNK = 1_000_000;
     public static int YIELD_MS = -1;
+    /** When yielding between slices (browser): target slice duration; the slice size adapts to it, so
+     *  pause/stop/input messages wait at most about this long whatever the program does (syscalls are
+     *  much slower per instruction than arithmetic). */
+    public static int SLICE_MS = 15;
+    private int slice = 5_000;
     private static final Charset UTF8 = Charset.forName("UTF-8");
 
     private final Sink sink;
@@ -513,14 +518,16 @@ public final class MarsEngine {
             if (stopRequested) return stopKind;
             if (speed <= 0) {
                 // full speed: let MARS run in large chunks (pause works between chunks and inside them)
-                int chunk = CHUNK;
+                int chunk = YIELD_MS >= 0 ? Math.min(slice, CHUNK) : CHUNK;
                 if (maxSteps > 0) chunk = (int) Math.min(chunk, maxSteps - steps);
                 if (chunk <= 0) return "max_steps";
                 IO.fold(); long before = IO.executed();
+                long t0 = System.currentTimeMillis();
                 try {
                     inChunk = true;
                     boolean done = Globals.program.simulateFromPC(bps.length == 0 ? null : bps, chunk, null);
                     inChunk = false;
+                    if (YIELD_MS >= 0) adaptSlice(chunk, IO.executed() - before, System.currentTimeMillis() - t0);
                     if (done) { finished = true; return "exit"; }
                     if (IO.suspended != null) {
                         if (!awaitResume()) return stopKind;
@@ -551,6 +558,12 @@ public final class MarsEngine {
             int sp = speed;
             if (sp > 0) Thread.sleep(Math.max(1, 1000 / sp));
         }
+    }
+
+    private void adaptSlice(int asked, long ran, long ms) {
+        if (ran < asked) return;                                    // cut short (exit, suspend, breakpoint)
+        if (ms > SLICE_MS * 2L && slice > 500) slice = Math.max(500, slice / 2);
+        else if (ms < SLICE_MS / 2 && slice < CHUNK) slice = Math.min(CHUNK, slice * 2);
     }
 
     private volatile String stopKind = "paused";

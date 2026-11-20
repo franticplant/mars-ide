@@ -87,7 +87,8 @@ def patch(path: str, src: str, syscalls: list[str]) -> str:
         # race fix: stopExecution() nulls simulatorThread while simulate() still waits on it → keep a local reference
         src = src.replace("simulatorThread = new SimThread(p,pc,maxSteps,breakPoints,actor);",
                           "final SimThread st = new SimThread(p,pc,maxSteps,breakPoints,actor);\n         simulatorThread = st;")
-        src = src.replace("simulatorThread.start();", "st.start();", 1)
+        # browser build: no worker thread per call (a green-thread start + join costs two event-loop turns)
+        src = src.replace("simulatorThread.start();", "if (actor == null && mars.ext.IO.inlineSimulation) st.startInline(); else st.start();", 1)
         src = src.replace("Object dun = simulatorThread.get();", "Object dun = st.get();")
         src = src.replace("ProcessingException pe = simulatorThread.pe;", "ProcessingException pe = st.pe;")
         src = src.replace("boolean done = simulatorThread.done;", "boolean done = st.done;")
@@ -134,6 +135,10 @@ def patch(path: str, src: str, syscalls: list[str]) -> str:
         assert "Thread.sleep" not in src
     if path == "mars/simulator/SwingWorker.java":
         src = src.replace("SwingUtilities.invokeLater(doFinished)", "doFinished.run()")
+        # run construct() on the calling thread (same steps as the worker thread, no start/join)
+        k = src.rindex("}")
+        src = src[:k] + ("    /** Run the worker on the calling thread; get() then returns at once. */\n"
+                         "    public void startInline() { Thread t = threadVar.get(); if (t != null) t.run(); }\n}\n")
     if path == "mars/mips/instructions/SyscallLoader.java":
         # no class-path scanning or reflection: construct every syscall directly
         news = ", ".join(f"new mars.mips.instructions.syscalls.{n}()" for n in syscalls)

@@ -78,8 +78,9 @@ public final class TeaMain {
             public String floatText(float v) { return jsFloat(v); }
             public String doubleText(double v) { return jsDouble(v); }
         };
-        MarsEngine.CHUNK = 50_000;   // short run slices so pause/input messages get through
+        MarsEngine.CHUNK = 200_000;  // largest run slice; MarsEngine adapts slices to ~SLICE_MS so pause/input get through
         MarsEngine.YIELD_MS = 0;
+        mars.ext.IO.inlineSimulation = true;
         // JS callbacks can't block, so each message is handed over by a short-lived green thread
         installInput(s -> new Thread(() -> INBOX.put(s)).start());
         File root = new File("/work");

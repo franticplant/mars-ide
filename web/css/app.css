@@ -60,6 +60,9 @@ svg.i.fill { fill: currentColor; stroke: none; }
 .icon-btn { width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--radius); color: var(--muted); }
 .icon-btn:hover { background: var(--hover); color: var(--text); }
 .pill { font-size: 12px; padding: 3px 9px; border-radius: 99px; background: var(--chip); color: var(--muted); white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+/* stacked alternatives share one cell: the widest sets the size, only .on is visible */
+.stack { display: inline-grid; } .stack > span { grid-area: 1 / 1; visibility: hidden; } .stack > span.on { visibility: visible; }
+.btn .ic { display: inline-flex; }
 .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .pill.running { color: var(--success); } .pill.paused { color: var(--warning); } .pill.done { color: var(--primary); }
 .pill.error { color: var(--error); } .pill.input { color: var(--accent); } .pill.ready { color: var(--primary); }

@@ -359,22 +359,51 @@
     renderKeybar();
   }
 
+  // The run bar is built once; renders only change labels, icons and enabled state in place.
+  // Rebuilding it while running (the step counter refreshes several times a second) replaced
+  // the button under the pointer between mouse-down and mouse-up, so clicks on Stop were lost.
+  // Each slot stacks all of its labels (one visible), so its width never changes.
+  const RUNBAR = [
+    ["assemble", { assemble: ["build", "Assemble", "F3"] }, ""],
+    ["go", { run: ["run", "Run", "F5"], continue: ["run", "Continue", "F5"], pause: ["pause", "Pause", "F9"] }, ""],
+    ["step", { step: ["step", "Step", "F7"] }, ""],
+    ["halt", { back: ["back", "Back", "F8"], stop: ["stop", "Stop", "Shift+F11"] }, ""],
+    ["reset", { reset: ["reset", "Reset", "Shift+F12"] }, "opt"],
+  ];
+  const PILL_STATES = ["edit", "offline", "running", "input", "error", "done", "paused", "ready"];
+  const stack = (items, key) => `<span class="stack">${items.map(t => `<span data-k="${esc(t)}">${esc(t)}</span>`).join("")}</span>`;
+  function buildRunbar() {
+    $("#runbar").innerHTML = RUNBAR.map(([slot, choices, cls]) =>
+      `<button class="btn ${cls}" data-slot="${slot}"><span class="ic"></span><span class="lbl">${stack(Object.values(choices).map(c => c[1]))}</span></button>`).join("") +
+      `<select class="speed opt" id="speed" title="Run speed">${[0, 1000, 100, 30, 10, 5, 2, 1].map(v =>
+        `<option value="${v}">${v ? v + "/s" : "max"}</option>`).join("")}</select>`;
+    $$("#runbar [data-slot]").forEach(b => b.onclick = () => { if (!b.disabled && b.dataset.act) ACT[b.dataset.act](); });
+    $("#speed").onchange = (e) => setSpeed(+e.target.value);
+    $("#pill").innerHTML = stack(PILL_STATES);
+  }
+  function setStack(el, key) { for (const sp of el.querySelectorAll(".stack > span")) sp.classList.toggle("on", sp.dataset.k === key); }
+  function setSlot(slot, choice, disabled) {
+    const b = $(`#runbar [data-slot="${slot}"]`);
+    const [, choices] = RUNBAR.find(r => r[0] === slot), [ic, lbl, k] = choices[choice];
+    const act = choice === "continue" ? "run" : choice;
+    if (b.dataset.choice !== choice) {
+      b.dataset.choice = choice; b.dataset.act = act; b.title = `${lbl} (${k})`;
+      b.querySelector(".ic").innerHTML = icon(ic, ic === "run" ? "fill" : "");
+      b.classList.toggle("run", ic === "run"); b.classList.toggle("pause", ic === "pause");
+      setStack(b, lbl);
+    }
+    if (b.disabled !== !!disabled) b.disabled = !!disabled;
+  }
   function renderRunbar() {
     const st = R.state || {};
-    const can = R.assembled && !R.running && !R.finished;
-    const items = [
-      ["assemble", "build", "Assemble", "F3", false, ""],
-      R.running ? ["pause", "pause", "Pause", "F9", false, "pause"] : ["run", "run", R.assembled && st.count && !R.finished ? "Continue" : "Run", "F5", R.finished, "run"],
-      ["step", "step", "Step", "F7", R.running || R.finished, ""],
-      R.running ? ["stop", "stop", "Stop", "Shift+F11", false, ""] : ["back", "back", "Back", "F8", !(st.can_backstep && R.assembled), "opt"],
-      ["reset", "reset", "Reset", "Shift+F12", !R.assembled, "opt"],
-    ];
-    $("#runbar").innerHTML = items.map(([a, ic, lbl, k, dis, cls]) =>
-      `<button class="btn ${cls}" data-act="${a}" ${dis ? "disabled" : ""} title="${lbl} (${k})">${icon(ic, ic === "run" ? "fill" : "")}<span class="lbl">${lbl}</span></button>`).join("") +
-      `<select class="speed opt" id="speed" title="Run speed">${[0, 1000, 100, 30, 10, 5, 2, 1].map(v =>
-        `<option value="${v}" ${S.speed === v ? "selected" : ""}>${v ? v + "/s" : "max"}</option>`).join("")}</select>`;
-    $$("#runbar [data-act]").forEach(b => b.onclick = () => ACT[b.dataset.act]());
-    $("#speed").onchange = (e) => setSpeed(+e.target.value);
+    if (!$("#runbar [data-slot]")) buildRunbar();
+    setSlot("assemble", "assemble", false);
+    setSlot("go", R.running ? "pause" : (R.assembled && st.count && !R.finished ? "continue" : "run"), !R.running && R.finished);
+    setSlot("step", "step", R.running || R.finished);
+    setSlot("halt", R.running ? "stop" : "back", !R.running && !(st.can_backstep && R.assembled));
+    setSlot("reset", "reset", !R.assembled);
+    const speed = $("#speed");
+    if (document.activeElement !== speed && speed.value !== String(S.speed)) speed.value = String(S.speed);
     const pill = $("#pill");
     let cls = "", txt = "edit";
     if (!engine.connected) { cls = "error"; txt = "offline"; }
@@ -383,13 +412,15 @@
     else if (R.finished) { cls = "done"; txt = "done"; }
     else if (R.assembled && st.count) { cls = "paused"; txt = "paused"; }
     else if (R.assembled) { cls = "ready"; txt = "ready"; }
-    pill.className = "pill " + cls;
+    if (pill.className !== "pill " + cls) pill.className = "pill " + cls;
+    setStack(pill, txt);
     const app = document.getElementById("app");
     for (const c of ["running", "paused", "error", "input", "done", "ready"]) app.classList.toggle("st-" + c, cls === c);
-    pill.textContent = txt;
-    $("#pcinfo").textContent = R.assembled && st ? `pc ${M.hex(st.pc || 0)} · ${st.count || 0} steps` : "";
+    const pc = R.assembled && st ? `pc ${M.hex(st.pc || 0)} · ${st.count || 0} steps` : "";
+    if ($("#pcinfo").textContent !== pc) $("#pcinfo").textContent = pc;
     const cur = S.current;
-    $("#mtitle").innerHTML = cur ? `${esc(cur.split("/").pop())}${isDirty(cur) ? " •" : ""}` : "MARS";
+    const title = cur ? `${esc(cur.split("/").pop())}${isDirty(cur) ? " •" : ""}` : "MARS";
+    if ($("#mtitle").innerHTML !== title) $("#mtitle").innerHTML = title;
   }
 
   function renderTabs() {
@@ -478,7 +509,7 @@
     chips($("#io-tabs"), [["run", "Run I/O"], ["msg", "Messages", errs || warns || ""]], R.ioTab,
       k => { R.ioTab = k; renderSubTabs(); showIoTab(); },
       `<span class="grow"></span><button class="chip" data-clear>Clear</button>`);
-    $("[data-clear]", $("#io-tabs")).onclick = () => { if (R.ioTab === "run") $("#out").textContent = ""; else { R.messages = []; renderMessages(); } };
+    $("[data-clear]", $("#io-tabs")).onclick = () => { if (R.ioTab === "run") consoleClear(); else { R.messages = []; renderMessages(); } };
     chips($("#tool-tabs"), [["bitmap", "Bitmap Display"], ["mmio", "Keyboard & Display MMIO"]], R.toolTab,
       k => { R.toolTab = k; renderSubTabs(); renderTools(); });
     chips($("#help-tabs"), [["card", "Card"], ["instr", "Instructions"], ["pseudo", "Pseudo"], ["dirs", "Directives"], ["sys", "Syscalls"], ["keys", "Shortcuts"], ["about", "About"]],
@@ -1810,19 +1841,62 @@
   const consoleAtBottom = () => out.scrollHeight - out.scrollTop - out.clientHeight < 24;
   function tailConsole() { if (consoleTail) out.scrollTop = out.scrollHeight; }
   out.addEventListener("scroll", () => { consoleTail = consoleAtBottom(); }, { passive: true });
+  // Output is queued and drawn at most once per frame, into blocks of a few KB cut at line
+  // ends. A program printing in a loop sends dozens of chunks a second; appending to one huge
+  // text flow (and trimming its start) re-laid out the whole console every time, which kept the
+  // page busy for seconds, so Stop/Pause reached the engine late. Now a frame touches only the
+  // newest block and trimming drops whole blocks.
+  // A closed block omits its final newline: the block boundary is the line break, so copied
+  // text and innerText read exactly like the program's output.
+  const OUT_MAX = 400000, OUT_KEEP = 300000, BLK_MIN = 2048, BLK_MAX = 8192;
+  const outQ = [];
+  let outQLen = 0, outFrame = 0, outLast = "", outBlk = null, outBlkLen = 0;
   function consoleWrite(text, cls = "") {
-    if (cls) { const s = document.createElement("span"); s.className = cls; s.textContent = text; out.appendChild(s); }
-    else {
-      const last = out.lastChild;
-      if (last && last.nodeType === 3) last.appendData(text); else out.appendChild(document.createTextNode(text));
+    if (!text) return;
+    outLast = text[text.length - 1];
+    outQ.push([text, cls]); outQLen += text.length;
+    if (outQLen > OUT_MAX) {             // far behind (e.g. hidden tab): keep only the newest output
+      while (outQ.length > 1 && outQLen - outQ[0][0].length >= OUT_KEEP) outQLen -= outQ.shift()[0].length;
+      if (outQLen > OUT_MAX) { const cut = outQLen - OUT_KEEP; outQ[0][0] = outQ[0][0].slice(cut); outQLen -= cut; }
     }
-    outLen += text.length;
-    if (outLen > 400000) { while (out.firstChild && outLen > 300000) { outLen -= out.firstChild.textContent.length; out.firstChild.remove(); } }
+    if (!outFrame) outFrame = requestAnimationFrame(flushConsole);
+  }
+  function outAppend(text, cls) {
+    while (text) {
+      if (!outBlk) { outBlk = document.createElement("div"); outBlk.className = "out-blk"; outBlk._len = 0; out.appendChild(outBlk); outBlkLen = 0; }
+      let take = text.length, close = false, atNl = false;
+      if (outBlkLen + text.length >= BLK_MIN) {
+        const k = text.indexOf("\n", Math.max(0, BLK_MIN - outBlkLen - 1));
+        if (k >= 0 && outBlkLen + k + 1 <= BLK_MAX) { take = k + 1; close = atNl = true; }
+        else if (outBlkLen + text.length >= BLK_MAX) { take = BLK_MAX - outBlkLen; close = true; }
+      }
+      const piece = atNl ? text.slice(0, take - 1) : text.slice(0, take);
+      text = text.slice(take);
+      if (piece) {
+        if (cls) { const sp = document.createElement("span"); sp.className = cls; sp.textContent = piece; outBlk.appendChild(sp); }
+        else { const last = outBlk.lastChild; if (last && last.nodeType === 3) last.appendData(piece); else outBlk.appendChild(document.createTextNode(piece)); }
+      }
+      outBlkLen += take; outBlk._len += take; outLen += take;
+      if (close) { if (!outBlk.firstChild) outBlk.appendChild(document.createTextNode("\u200b")); outBlk = null; outBlkLen = 0; }
+    }
+  }
+  function flushConsole() {
+    if (outFrame) { cancelAnimationFrame(outFrame); outFrame = 0; }
+    if (!outQ.length) return;
+    const q = outQ.splice(0); outQLen = 0;
+    for (const [t, c] of q) outAppend(t, c);
+    while (outLen > OUT_MAX && out.firstChild && out.firstChild !== outBlk) {
+      while (outLen > OUT_KEEP && out.firstChild && out.firstChild !== outBlk) { outLen -= out.firstChild._len || out.firstChild.textContent.length; out.firstChild.remove(); }
+    }
     tailConsole();
   }
+  function consoleClear() {
+    outQ.length = 0; outQLen = 0; outLast = ""; outBlk = null; outBlkLen = 0;
+    if (outFrame) { cancelAnimationFrame(outFrame); outFrame = 0; }
+    out.textContent = ""; outLen = 0;
+  }
   function consoleLine(text, cls) {
-    const t = out.textContent;
-    if (t && !t.endsWith("\n")) consoleWrite("\n");
+    if (outLast && outLast !== "\n") consoleWrite("\n");
     consoleWrite(text + "\n", cls);
   }
 
@@ -2925,7 +2999,7 @@
       case "unauthorized":
         modal({ title: "Access token required", body: `<div class="msgtext">Open the link printed by the server (it contains <span class="kbdk">?token=…</span>) once in this browser.</div>` });
         break;
-      case "replay_begin": out.textContent = ""; outLen = 0; break;
+      case "replay_begin": consoleClear(); break;
       case "replay_end": break;
       case "out": consoleWrite(ev.text, ev.stream === "stderr" ? "stderr" : ""); if (isNarrow() && S.m !== "io" && !R.unread.has("io")) { R.unread.add("io"); renderBottomNav(); } break;
       case "input_request": setWaiting(ev.kind); break;

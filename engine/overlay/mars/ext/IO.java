@@ -44,6 +44,8 @@ public final class IO {
 
    /** Milliseconds to wait after a sleep / synchronous MIDI syscall (honoured by the host's run loop). */
    public static volatile int sleepMs = 0;
+   /** Simulate on the calling thread instead of a worker thread (single-threaded hosts: the browser). */
+   public static boolean inlineSimulation = false;
 
    /**
     * Thrown by an instruction that must wait for the outside world. The simulator stops cleanly:
